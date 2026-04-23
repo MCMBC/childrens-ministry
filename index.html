@@ -1,0 +1,1404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Children's Ministry — Mt. Calvary M.B. Church</title>
+  <meta name="description" content="Children's Church Information System for Mt. Calvary Missionary Baptist Church. Synced to Google Sheets." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E✨%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300..900;1,300..900&family=Lora:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --cream: #F5EFE4; --cream-soft: #FAF6EE; --sage: #5C7A5A; --sage-dark: #3E5A3C;
+      --sage-soft: #A8BEA6; --terra: #B8623D; --terra-soft: #E8A98A; --ink: #2A2824;
+      --ink-soft: #5C574E; --gold: #C89B3C; --paper: #FFFDF7; --divider: #D8CFBE;
+      --danger: #A43E1F; --danger-bg: #F7E4DC; --success: #3E5A3C; --success-bg: #DDE7D8;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: 'Lora', Georgia, serif; background: var(--cream); color: var(--ink); min-height: 100vh; }
+    .font-display { font-family: 'Fraunces', Georgia, serif; font-variation-settings: "opsz" 144, "SOFT" 50; }
+    .font-serif { font-family: 'Lora', Georgia, serif; }
+    .btn { cursor: pointer; font-family: inherit; border: none; transition: all .2s; letter-spacing: .02em; }
+    .btn-primary { background: var(--sage-dark); color: var(--cream-soft); }
+    .btn-primary:hover { background: var(--ink); transform: translateY(-1px); box-shadow: 0 8px 20px -8px rgba(62,90,60,.5); }
+    .btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--divider); }
+    .btn-ghost:hover { background: var(--paper); border-color: var(--sage); }
+    .btn-terra { background: var(--terra); color: var(--cream-soft); }
+    .btn-terra:hover { background: #9A4E2F; }
+    .btn-danger { background: transparent; color: var(--danger); border: none; cursor: pointer; }
+    .btn-danger:hover { text-decoration: underline; }
+    .card { background: var(--paper); border: 1px solid var(--divider); border-radius: 4px; }
+    .input-field { background: var(--cream-soft); border: 1px solid var(--divider); color: var(--ink); padding: .6rem .8rem; border-radius: 3px; width: 100%; font-family: inherit; font-size: .95rem; transition: border-color .2s; }
+    .input-field:focus { outline: none; border-color: var(--sage); background: var(--paper); }
+    .label-text { font-family: 'Fraunces', serif; font-weight: 500; color: var(--ink); font-size: .82rem; letter-spacing: .08em; text-transform: uppercase; }
+    .tab-active { color: var(--ink); border-bottom: 2px solid var(--terra); }
+    .tab-inactive { color: var(--ink-soft); border-bottom: 2px solid transparent; }
+    .tab-inactive:hover { color: var(--ink); }
+    .ornament::before, .ornament::after { content: '❦'; color: var(--gold); margin: 0 .8rem; font-size: .7em; }
+    .divider-line { height: 1px; background: linear-gradient(to right, transparent, var(--divider), transparent); }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+    .anim-in { animation: slideUp .4s ease-out both; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .anim-fade { animation: fadeIn .3s ease-out both; }
+    .pill { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 999px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+    .pill-sage { background: var(--success-bg); color: var(--sage-dark); }
+    .pill-terra { background: #F5E0D2; color: var(--terra); }
+    .pill-gold { background: #F4E7C1; color: #8B6B1F; }
+    .pill-danger { background: var(--danger-bg); color: var(--danger); }
+    .icon { width: 16px; height: 16px; stroke-width: 2; stroke: currentColor; fill: none; stroke-linecap: round; stroke-linejoin: round; display: inline-block; vertical-align: middle; }
+    .icon-sm { width: 14px; height: 14px; }
+    .icon-lg { width: 20px; height: 20px; }
+    .hidden { display: none !important; }
+    .spinner { border: 4px solid var(--sage); border-top-color: transparent; border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .stack > * + * { margin-top: 1rem; }
+    .grid-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+    .grid-actions { display: grid; grid-template-columns: 1fr; gap: .75rem; }
+    .grid-roster { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+    .grid-detail { display: grid; grid-template-columns: 1fr; gap: 1.25rem; }
+    .grid-checkin { display: grid; grid-template-columns: 1fr; gap: .5rem; max-height: 24rem; overflow-y: auto; }
+    .chart-bars { display: flex; align-items: flex-end; gap: .5rem; height: 10rem; }
+    .chart-bar { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: .5rem; }
+    .chart-bar-fill { width: 100%; border-radius: 4px 4px 0 0; min-height: 4px; }
+    .avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--sage-dark); color: var(--cream-soft); display: flex; align-items: center; justify-content: center; font-family: 'Fraunces', serif; font-weight: 600; font-size: 1.1rem; flex-shrink: 0; }
+    .avatar-lg { width: 80px; height: 80px; font-size: 2rem; }
+    .avatar-sm { width: 44px; height: 44px; font-size: 1rem; }
+    .toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); padding: .75rem 1.25rem; border-radius: 3px; box-shadow: 0 10px 25px rgba(0,0,0,.15); z-index: 50; display: flex; align-items: center; gap: .5rem; font-size: .9rem; font-weight: 500; color: var(--cream-soft); }
+    @media (min-width: 640px) {
+      .grid-stats { grid-template-columns: repeat(4, 1fr); }
+      .grid-actions { grid-template-columns: repeat(3, 1fr); }
+      .grid-roster { grid-template-columns: repeat(2, 1fr); }
+      .grid-detail { grid-template-columns: repeat(2, 1fr); }
+      .grid-checkin { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (min-width: 1024px) {
+      .grid-roster { grid-template-columns: repeat(3, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- Inline SVG icons -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-user-plus" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M20 14.66V20a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5.34"/><polygon points="18 2 22 6 12 16 8 16 8 12 18 2"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="i-login" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></symbol>
+    <symbol id="i-baby" viewBox="0 0 24 24"><path d="M9 12h.01M15 12h.01"/><path d="M10 16c.5.3 1.2.5 2 .5s1.5-.2 2-.5"/><path d="M19 6.3a9 9 0 0 1 1.8 3.9 2 2 0 0 1 0 3.6 9 9 0 0 1-17.6 0 2 2 0 0 1 0-3.6A9 9 0 0 1 12 3c2 0 3.5 1.1 3.5 2.5s-.9 2.5-2 2.5c-.8 0-1.5-.4-1.5-1"/></symbol>
+    <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+    <symbol id="i-arrow-left" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></symbol>
+    <symbol id="i-cloud-off" viewBox="0 0 24 24"><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" y1="1" x2="23" y2="23"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  </svg>
+
+  <script>
+  // ============================================================
+  // Mt. Calvary M.B. Church — Children's Ministry System
+  // Google Sheets-backed version.
+  // First run: enter your Web App URL and passcode to connect.
+  // Data is synced to a shared Google Sheet and cached locally
+  // so the app keeps working if the network drops.
+  // ============================================================
+
+  const KEYS = {
+    CHILDREN: 'cc:children',
+    ATTENDANCE: 'cc:attendance',
+    CONFIG: 'cc:config',          // { backendUrl, passcode }
+    PENDING: 'cc:pending'         // queue of actions to retry when back online
+  };
+
+  // State
+  const state = {
+    children: [],
+    attendance: [],
+    view: 'dashboard',
+    selectedId: null,
+    editing: null,
+    search: '',
+    checkinSearch: '',
+    // Backend
+    config: null,                 // null until configured
+    online: true,                 // last sync attempt succeeded
+    syncing: false,               // request in flight
+    pendingCount: 0,              // queued writes waiting to retry
+    showSettings: false,
+    bootError: null,              // shown on login screen
+    loginDraft: { backendUrl: '', passcode: '' }  // preserves input across failed attempts
+  };
+
+  // Storage
+  const store = {
+    load(key, fallback) {
+      try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback; }
+      catch(e) { return fallback; }
+    },
+    save(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch(e) { console.warn(e); }
+    },
+    remove(key) {
+      try { localStorage.removeItem(key); } catch(e) { /* ignore */ }
+    }
+  };
+
+  // ============================================================
+  // Backend API — talks to the Apps Script Web App
+  // ============================================================
+  const api = {
+    async get() {
+      if (!state.config) throw new Error('Not configured');
+      const url = state.config.backendUrl + '?passcode=' + encodeURIComponent(state.config.passcode);
+      const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Server error');
+      return data;
+    },
+    async post(action, payload) {
+      if (!state.config) throw new Error('Not configured');
+      // Apps Script requires text/plain to avoid CORS preflight
+      const res = await fetch(state.config.backendUrl, {
+        method: 'POST',
+        redirect: 'follow',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ action, passcode: state.config.passcode }, payload))
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Server error');
+      return data;
+    }
+  };
+
+  // Wraps an async operation: updates local state immediately (optimistic),
+  // writes to the backend, falls back to queueing on failure.
+  async function syncAction(action, payload, optimisticUpdate) {
+    // 1. Apply optimistic update to local state + cache
+    if (optimisticUpdate) optimisticUpdate();
+    saveCache();
+    render();
+
+    // 2. Try to persist to backend
+    if (!state.config) return;
+    state.syncing = true;
+    updateHeaderStatus();
+    try {
+      const result = await api.post(action, payload);
+      state.online = true;
+      state.syncing = false;
+      updateHeaderStatus();
+      return result;
+    } catch (err) {
+      state.online = false;
+      state.syncing = false;
+      // Queue the action for retry
+      const pending = store.load(KEYS.PENDING, []);
+      pending.push({ action, payload, ts: Date.now() });
+      store.save(KEYS.PENDING, pending);
+      state.pendingCount = pending.length;
+      updateHeaderStatus();
+      toast('Saved locally. Will sync when back online.', 'warn');
+    }
+  }
+
+  async function retryPending() {
+    const pending = store.load(KEYS.PENDING, []);
+    if (pending.length === 0) return;
+    state.syncing = true;
+    updateHeaderStatus();
+    const remaining = [];
+    for (const item of pending) {
+      try { await api.post(item.action, item.payload); }
+      catch (err) { remaining.push(item); }
+    }
+    store.save(KEYS.PENDING, remaining);
+    state.pendingCount = remaining.length;
+    state.online = remaining.length === 0;
+    state.syncing = false;
+    if (pending.length > remaining.length) {
+      toast(`Synced ${pending.length - remaining.length} pending change${pending.length - remaining.length === 1 ? '' : 's'}`);
+    }
+    updateHeaderStatus();
+  }
+
+  function saveCache() {
+    store.save(KEYS.CHILDREN, state.children);
+    store.save(KEYS.ATTENDANCE, state.attendance);
+  }
+
+  function updateHeaderStatus() {
+    const el = document.getElementById('sync-status');
+    if (el) el.outerHTML = syncStatusHTML();
+  }
+
+  function syncStatusHTML() {
+    const p = state.pendingCount;
+    let html = '', label = '', color = 'var(--ink-soft)', iconName = 'cloud';
+    if (!state.config) {
+      return `<div id="sync-status" style="display:none"></div>`;
+    }
+    if (state.syncing) {
+      label = 'Syncing…';
+      color = 'var(--sage)';
+      iconName = 'refresh';
+    } else if (!state.online || p > 0) {
+      label = p > 0 ? `${p} pending` : 'Offline';
+      color = 'var(--terra)';
+      iconName = 'cloud-off';
+    } else {
+      label = 'Synced';
+      color = 'var(--sage)';
+      iconName = 'cloud';
+    }
+    return `<div id="sync-status" style="display:flex;align-items:center;gap:.375rem;font-size:.75rem;color:${color};">${icon(iconName,'icon icon-sm')}<span>${label}</span></div>`;
+  }
+
+  // Helpers
+  const uid = () => Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4);
+  const todayISO = () => new Date().toISOString().slice(0,10);
+  const nowISO = () => new Date().toISOString();
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+  const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}) : '';
+  const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '';
+  const calcAge = (bd) => {
+    if (!bd) return '';
+    const b = new Date(bd), t = new Date();
+    let a = t.getFullYear() - b.getFullYear();
+    const m = t.getMonth() - b.getMonth();
+    if (m < 0 || (m === 0 && t.getDate() < b.getDate())) a--;
+    return a >= 0 ? a : '';
+  };
+  const initials = (name) => (name || '').split(/\s+/).filter(Boolean).map(w => w[0]).slice(0,2).join('').toUpperCase() || '?';
+  const icon = (name, cls='icon') => `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
+
+  const emptyChild = () => ({
+    id:'', fullName:'', birthdate:'', gradeLevel:'', school:'', parentNames:'',
+    phoneNumbers:'', emails:'', preferredContact:'Phone', allergies:'', allergySeverity:'None',
+    medicalConditions:'', specialNeeds:'', emergencyContact:'', authorizedPickup:'',
+    photoConsent:false, newsletterOptIn:false, visitorStatus:'Visitor', churchMembership:'',
+    prayerRequests:'', classroom:'', createdAt:''
+  });
+
+  // Sample data shown only in demo mode (no backend configured)
+  const seed = [
+    Object.assign(emptyChild(), {id:uid(), fullName:'Amara Johnson', birthdate:'2017-03-14', gradeLevel:'2nd Grade', school:'Oakwood Elementary', parentNames:'Denise & Marcus Johnson', phoneNumbers:'(555) 123-4567', emails:'dmjohnson@example.com', preferredContact:'Text', allergies:'Peanuts', allergySeverity:'Severe', emergencyContact:'Grandma Ruth — (555) 222-3344', authorizedPickup:'Denise Johnson, Marcus Johnson, Ruth Johnson', photoConsent:true, newsletterOptIn:true, visitorStatus:'Member', churchMembership:'Mt. Calvary', prayerRequests:'Strength at school', classroom:'Lambs', createdAt:nowISO()}),
+    Object.assign(emptyChild(), {id:uid(), fullName:'Eli Carter', birthdate:'2019-08-02', gradeLevel:'Pre-K', school:'Sunshine Preschool', parentNames:'Tasha Carter', phoneNumbers:'(555) 987-6543', emails:'tasha.c@example.com', preferredContact:'Phone', allergies:'Dairy', allergySeverity:'Mild', medicalConditions:'Asthma (inhaler in bag)', emergencyContact:'Aunt Bri — (555) 777-1122', authorizedPickup:'Tasha Carter, Bri Carter', newsletterOptIn:true, visitorStatus:'Visitor', classroom:'Little Lights', createdAt:nowISO()})
+  ];
+
+  // ============================================================
+  // Boot
+  // ============================================================
+  async function init() {
+    // Load config from storage
+    state.config = store.load(KEYS.CONFIG, null);
+    state.pendingCount = store.load(KEYS.PENDING, []).length;
+
+    // If no config, show login screen with demo data
+    if (!state.config) {
+      state.children = store.load(KEYS.CHILDREN, null) || seed;
+      state.attendance = store.load(KEYS.ATTENDANCE, []);
+      state.view = 'login';
+      render();
+      return;
+    }
+
+    // Load from cache immediately for fast paint
+    state.children = store.load(KEYS.CHILDREN, []);
+    state.attendance = store.load(KEYS.ATTENDANCE, []);
+    state.view = 'dashboard';
+    render();
+
+    // Then try to sync from backend
+    await refreshFromBackend();
+    // Retry any pending writes
+    await retryPending();
+  }
+
+  async function refreshFromBackend() {
+    if (!state.config) return;
+    state.syncing = true;
+    updateHeaderStatus();
+    try {
+      const data = await api.get();
+      state.children = data.children || [];
+      state.attendance = data.attendance || [];
+      saveCache();
+      state.online = true;
+      state.syncing = false;
+      updateHeaderStatus();
+      render();
+    } catch (err) {
+      state.online = false;
+      state.syncing = false;
+      updateHeaderStatus();
+      console.warn('Backend fetch failed, using cached data:', err.message);
+    }
+  }
+
+  function toast(msg, kind='success') {
+    const existing = document.querySelector('.toast');
+    if (existing) existing.remove();
+    const bg = kind === 'error' ? 'var(--danger)' : kind === 'warn' ? 'var(--terra)' : 'var(--sage-dark)';
+    const el = document.createElement('div');
+    el.className = 'toast anim-in';
+    el.style.background = bg;
+    el.innerHTML = icon('check','icon icon-sm') + '<span>' + esc(msg) + '</span>';
+    document.body.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, 2500);
+    setTimeout(() => el.remove(), 2900);
+  }
+
+  // ============================================================
+  // Actions
+  // ============================================================
+  const actions = {
+    goto(view, opts={}) {
+      state.view = view;
+      if ('selectedId' in opts) state.selectedId = opts.selectedId;
+      if ('editing' in opts) state.editing = opts.editing;
+      window.scrollTo({top: 0});
+      render();
+    },
+
+    async connect(backendUrl, passcode) {
+      backendUrl = (backendUrl || '').trim();
+      passcode = (passcode || '').trim();
+      state.loginDraft = { backendUrl, passcode: '' }; // preserve URL but never the passcode
+      if (!backendUrl || !passcode) {
+        state.bootError = 'Both Web App URL and passcode are required.';
+        render();
+        return;
+      }
+      if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(backendUrl)) {
+        state.bootError = 'That doesn\'t look like an Apps Script Web App URL. It should start with https://script.google.com/';
+        render();
+        return;
+      }
+      state.config = { backendUrl, passcode };
+      state.bootError = null;
+      state.syncing = true;
+      render();
+      try {
+        const data = await api.get();
+        // Success — save config, load data
+        store.save(KEYS.CONFIG, state.config);
+        state.children = data.children || [];
+        state.attendance = data.attendance || [];
+        saveCache();
+        state.online = true;
+        state.syncing = false;
+        state.view = 'dashboard';
+        state.loginDraft = { backendUrl: '', passcode: '' };
+        toast('Connected to your sheet.');
+        render();
+        retryPending();
+      } catch (err) {
+        state.config = null;
+        state.syncing = false;
+        state.bootError = 'Could not connect: ' + err.message + '. Check your URL and passcode, and make sure the Web App is deployed with access set to "Anyone".';
+        render();
+      }
+    },
+
+    disconnect() {
+      if (!confirm('Disconnect from Google Sheets? Local cache will be cleared and you\'ll be asked for the URL and passcode again.')) return;
+      store.remove(KEYS.CONFIG);
+      store.remove(KEYS.CHILDREN);
+      store.remove(KEYS.ATTENDANCE);
+      store.remove(KEYS.PENDING);
+      state.config = null;
+      state.children = seed;
+      state.attendance = [];
+      state.pendingCount = 0;
+      state.showSettings = false;
+      state.view = 'login';
+      render();
+    },
+
+    async refresh() {
+      await refreshFromBackend();
+      await retryPending();
+      toast('Refreshed from sheet');
+    },
+
+    async saveChild(form) {
+      const err = validateChild(form);
+      if (err) { toast(err, 'error'); return false; }
+      const isNew = !form.id || !state.children.find(c => c.id === form.id);
+      if (isNew) {
+        form.id = uid();
+        form.createdAt = nowISO();
+      }
+      form.updatedAt = nowISO();
+      const msg = isNew ? `Added ${form.fullName}` : `Updated ${form.fullName}`;
+      await syncAction('upsertChild', { child: form }, () => {
+        if (isNew) state.children.push(form);
+        else state.children = state.children.map(c => c.id === form.id ? form : c);
+      });
+      toast(msg);
+      actions.goto('roster');
+      return true;
+    },
+
+    async deleteChild(id) {
+      const c = state.children.find(x => x.id === id);
+      if (!c) return;
+      if (!confirm(`Remove ${c.fullName} from the roster? This cannot be undone.`)) return;
+      await syncAction('deleteChild', { id }, () => {
+        state.children = state.children.filter(x => x.id !== id);
+        state.attendance = state.attendance.filter(a => a.childId !== id);
+      });
+      toast(`Removed ${c.fullName}`, 'warn');
+      actions.goto('roster');
+    },
+
+    async checkIn(childId) {
+      const c = state.children.find(x => x.id === childId);
+      if (!c) return;
+      const rec = { id: uid(), childId, date: todayISO(), checkInAt: nowISO(), checkOutAt: '', classroom: c.classroom || '' };
+      await syncAction('addAttendance', { record: rec }, () => {
+        state.attendance.unshift(rec);
+      });
+      toast(`Checked in ${c.fullName}`);
+    },
+
+    async checkOut(recId) {
+      const existing = state.attendance.find(a => a.id === recId);
+      if (!existing) return;
+      const updated = Object.assign({}, existing, { checkOutAt: nowISO() });
+      await syncAction('updateAttendance', { record: updated }, () => {
+        state.attendance = state.attendance.map(a => a.id === recId ? updated : a);
+      });
+      toast('Checked out');
+    },
+
+    exportJSON() {
+      const payload = { exportedAt: nowISO(), church: 'Mt. Calvary Missionary Baptist Church', children: state.children, attendance: state.attendance };
+      download(`mt-calvary-children-${todayISO()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+      toast('Exported JSON backup');
+    },
+
+    exportCSV() {
+      const headers = ['Full Name','Birthdate','Age','Grade','School','Parents','Phones','Emails','Preferred Contact','Allergies','Allergy Severity','Medical','Special Needs','Emergency Contact','Authorized Pickup','Photo Consent','Newsletter','Status','Membership','Classroom','Prayer Requests'];
+      const rows = state.children.map(c => [c.fullName,c.birthdate,calcAge(c.birthdate),c.gradeLevel,c.school,c.parentNames,c.phoneNumbers,c.emails,c.preferredContact,c.allergies,c.allergySeverity,c.medicalConditions,c.specialNeeds,c.emergencyContact,c.authorizedPickup,c.photoConsent?'Yes':'No',c.newsletterOptIn?'Yes':'No',c.visitorStatus,c.churchMembership,c.classroom,c.prayerRequests]);
+      const csvEsc = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
+      const csv = [headers, ...rows].map(r => r.map(csvEsc).join(',')).join('\n');
+      download(`mt-calvary-roster-${todayISO()}.csv`, csv, 'text/csv');
+      toast('Exported CSV roster');
+    },
+
+    importJSON(file) {
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        try {
+          const data = JSON.parse(ev.target.result);
+          if (!data.children) throw new Error('Invalid backup file');
+          const msg = state.config
+            ? `Import ${data.children.length} children and overwrite the Google Sheet? This cannot be undone.`
+            : `Import ${data.children.length} children? This will replace current data.`;
+          if (!confirm(msg)) return;
+          state.children = data.children;
+          state.attendance = data.attendance || [];
+          saveCache();
+          if (state.config) {
+            await syncAction('bulkImport', { children: data.children, attendance: data.attendance || [] }, () => {});
+          }
+          toast('Imported successfully');
+          render();
+        } catch (err) { toast('Import failed: ' + err.message, 'error'); }
+      };
+      reader.readAsText(file);
+    },
+
+    toggleSettings() {
+      state.showSettings = !state.showSettings;
+      render();
+    }
+  };
+
+  function validateChild(c) {
+    if (!c.fullName.trim()) return 'Child\'s full name is required';
+    if (!c.parentNames.trim()) return 'Parent/guardian name is required';
+    if (!c.phoneNumbers.trim() && !c.emails.trim()) return 'Provide a phone number or email';
+    if (!c.emergencyContact.trim()) return 'Emergency contact is required for safety';
+    return null;
+  }
+
+  function download(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ============================================================
+  // Rendering
+  // ============================================================
+  function render() {
+    const app = document.getElementById('app');
+    app.innerHTML = layout();
+    attachHandlers();
+  }
+
+  function layout() {
+    // Login/setup screen — shown when no backend is configured
+    if (state.view === 'login') {
+      return renderLogin();
+    }
+
+    const connected = !!state.config;
+    return `
+      <header style="border-bottom: 1px solid var(--divider); background: var(--paper);">
+        <div style="max-width: 80rem; margin: 0 auto; padding: 1.25rem 1.5rem;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:.75rem;">
+              <div style="width:44px;height:44px;border-radius:50%;background:var(--sage-dark);display:flex;align-items:center;justify-content:center;color:var(--cream-soft);">
+                ${icon('sparkles','icon icon-lg')}
+              </div>
+              <div>
+                <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--terra);">Mt. Calvary M.B. Church</div>
+                <h1 class="font-display" style="font-size:1.7rem;font-weight:600;line-height:1.1;margin:0;color:var(--ink);">Children's Ministry</h1>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+              ${syncStatusHTML()}
+              ${connected ? `<button class="btn btn-ghost" style="padding:.5rem;font-size:.875rem;display:flex;align-items:center;" data-action="refresh" title="Refresh from sheet">${icon('refresh','icon icon-sm')}</button>` : ''}
+              <button class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="export-json" title="Download a JSON backup">${icon('download','icon icon-sm')} Backup</button>
+              <label class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;cursor:pointer;" title="Restore from a backup file">
+                ${icon('upload','icon icon-sm')} Restore
+                <input type="file" accept="application/json" class="hidden" data-action="import-json">
+              </label>
+              <div style="position:relative;">
+                <button class="btn btn-ghost" style="padding:.5rem;font-size:.875rem;display:flex;align-items:center;" data-action="toggle-settings" title="Settings">${icon('settings','icon icon-sm')}</button>
+                ${state.showSettings ? `
+                  <div style="position:absolute;right:0;top:100%;margin-top:.5rem;background:var(--paper);border:1px solid var(--divider);border-radius:4px;box-shadow:0 10px 25px rgba(0,0,0,.1);min-width:18rem;z-index:40;padding:1rem;">
+                    <div class="label-text" style="color:var(--ink-soft);margin-bottom:.5rem;">Backend</div>
+                    ${connected ? `
+                      <div style="font-size:.75rem;word-break:break-all;color:var(--ink-soft);margin-bottom:.25rem;">Connected</div>
+                      <div style="font-size:.7rem;word-break:break-all;color:var(--ink-soft);margin-bottom:.75rem;opacity:.7;">${esc(state.config.backendUrl.slice(0, 60))}…</div>
+                      <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.5rem;" data-action="refresh">${icon('refresh','icon icon-sm')} Refresh from sheet</button>
+                      <button class="btn" style="width:100%;padding:.5rem;font-size:.875rem;color:var(--danger);border:1px solid var(--divider);background:transparent;" data-action="disconnect">${icon('logout','icon icon-sm')} Disconnect</button>
+                    ` : `
+                      <div style="font-size:.75rem;color:var(--terra);margin-bottom:.75rem;">Demo mode — no backend</div>
+                      <button class="btn btn-primary" style="width:100%;padding:.5rem;font-size:.875rem;border-radius:3px;" data-action="show-login">Connect Google Sheet</button>
+                    `}
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+        </div>
+        <nav style="max-width:80rem;margin:0 auto;padding:0 1.5rem;">
+          <div style="display:flex;gap:.25rem;overflow-x:auto;">
+            ${tab('dashboard','Overview','home')}
+            ${tab('roster','Roster','users')}
+            ${tab('checkin','Check-In','clipboard')}
+          </div>
+        </nav>
+      </header>
+
+      <main style="max-width:80rem;margin:0 auto;padding:2rem 1.5rem;" class="anim-fade">
+        ${viewContent()}
+      </main>
+
+      <footer style="max-width:80rem;margin:0 auto;padding:2.5rem 1.5rem;text-align:center;">
+        <div class="divider-line" style="margin-bottom:1.5rem;"></div>
+        <p class="font-display" style="font-style:italic;font-size:.875rem;color:var(--ink-soft);margin:0;">
+          "Let the little children come to me." — Matthew 19:14
+        </p>
+        <p style="font-size:.75rem;margin-top:.75rem;color:var(--ink-soft);">
+          ${connected
+            ? 'Records live in your shared Google Sheet. Offline changes sync automatically when you reconnect.'
+            : 'Demo mode. Data is stored locally — connect a Google Sheet from Settings to sync across devices.'}
+        </p>
+      </footer>
+    `;
+  }
+
+  function tab(key, label, iconName) {
+    const active = state.view === key;
+    return `<button class="btn ${active ? 'tab-active' : 'tab-inactive'}" style="background:transparent;padding:.75rem 1rem;font-size:.875rem;font-weight:500;display:flex;align-items:center;gap:.5rem;white-space:nowrap;" data-action="goto" data-view="${key}">${icon(iconName,'icon icon-sm')} ${label}</button>`;
+  }
+
+  function viewContent() {
+    switch (state.view) {
+      case 'dashboard': return renderDashboard();
+      case 'roster': return renderRoster();
+      case 'checkin': return renderCheckin();
+      case 'child': return renderChildDetail();
+      case 'form': return renderForm();
+      default: return renderDashboard();
+    }
+  }
+
+  // ---------- Login / Setup ----------
+  function renderLogin() {
+    const savedUrl = (state.loginDraft && state.loginDraft.backendUrl) || (state.config && state.config.backendUrl) || '';
+    return `
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem 1.5rem;">
+        <div style="width:100%;max-width:28rem;" class="anim-in">
+          <div style="text-align:center;margin-bottom:2rem;">
+            <div style="width:64px;height:64px;border-radius:50%;background:var(--sage-dark);display:inline-flex;align-items:center;justify-content:center;color:var(--cream-soft);margin-bottom:1rem;">
+              ${icon('sparkles','icon icon-lg')}
+            </div>
+            <div class="ornament" style="font-size:11px;letter-spacing:.3em;text-transform:uppercase;margin-bottom:.5rem;color:var(--terra);">Mt. Calvary M.B. Church</div>
+            <h1 class="font-display" style="font-size:2rem;font-weight:600;margin:0;color:var(--ink);">Children's Ministry</h1>
+            <p style="margin-top:.5rem;color:var(--ink-soft);font-size:.9rem;">Connect to your Google Sheet to begin.</p>
+          </div>
+
+          <form class="card" style="padding:1.75rem;" id="login-form">
+            ${state.bootError ? `
+              <div style="margin-bottom:1rem;padding:.75rem;border-radius:3px;background:var(--danger-bg);color:var(--danger);font-size:.875rem;">
+                ${esc(state.bootError)}
+              </div>
+            ` : ''}
+
+            <div style="margin-bottom:1rem;">
+              <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Web App URL</label>
+              <input class="input-field" name="backendUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(savedUrl)}" required>
+              <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">From Apps Script → Deploy → New deployment → Web app.</div>
+            </div>
+
+            <div style="margin-bottom:1.25rem;">
+              <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Passcode</label>
+              <input class="input-field" name="passcode" type="password" placeholder="Enter the shared passcode" required>
+              <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">Set in line 15 of your Apps Script file.</div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="width:100%;padding:.75rem;font-weight:600;border-radius:3px;display:flex;align-items:center;justify-content:center;gap:.5rem;${state.syncing ? 'opacity:.6;' : ''}" ${state.syncing ? 'disabled' : ''}>
+              ${state.syncing ? icon('refresh','icon icon-sm') + ' Connecting…' : icon('lock','icon icon-sm') + ' Connect'}
+            </button>
+
+            <div style="text-align:center;margin-top:1rem;">
+              <button type="button" class="btn" style="background:transparent;font-size:.8rem;color:var(--ink-soft);text-decoration:underline;padding:.25rem;" data-action="try-demo">Or try the demo without connecting</button>
+            </div>
+          </form>
+
+          <p style="text-align:center;font-size:.75rem;margin-top:1.5rem;color:var(--ink-soft);">
+            Don't have this set up yet? See the <strong>SETUP.md</strong> guide included with this app.
+          </p>
+        </div>
+      </div>
+    `;
+  }
+
+  // ---------- Dashboard ----------
+  function renderDashboard() {
+    const today = todayISO();
+    const checkedInToday = state.attendance.filter(a => a.date === today);
+    const presentNow = checkedInToday.filter(a => !a.checkOutAt);
+    const withAllergies = state.children.filter(c => c.allergies && c.allergies.trim() && c.allergies.toLowerCase() !== 'none');
+    const severe = state.children.filter(c => c.allergySeverity === 'Severe');
+    const medical = state.children.filter(c => c.medicalConditions && c.medicalConditions.trim());
+    const visitors = state.children.filter(c => c.visitorStatus === 'Visitor');
+
+    const weeks = [];
+    for (let i = 7; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - (d.getDay() + 7 * i));
+      const iso = d.toISOString().slice(0, 10);
+      const count = new Set(state.attendance.filter(a => a.date === iso).map(a => a.childId)).size;
+      weeks.push({ date: iso, count, label: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) });
+    }
+    const maxWeek = Math.max(1, ...weeks.map(w => w.count));
+
+    return `
+      <div class="stack" style="gap:2rem;">
+        <div style="text-align:center;padding:1.5rem 0;" class="anim-in">
+          <div class="ornament" style="font-size:11px;letter-spacing:.3em;text-transform:uppercase;margin-bottom:.75rem;color:var(--terra);">Welcome</div>
+          <h2 class="font-display" style="font-size:3rem;font-weight:300;color:var(--ink);margin:0;">
+            ${new Date().toLocaleDateString('en-US',{weekday:'long'})}, ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric'})}
+          </h2>
+          <p style="margin-top:.75rem;font-style:italic;color:var(--ink-soft);">Caring for ${state.children.length} little ${state.children.length === 1 ? 'one' : 'ones'} and counting blessings.</p>
+        </div>
+
+        <div class="grid-stats">
+          ${statTile('users','Total Enrolled',state.children.length,'sage','')}
+          ${statTile('check','Present Today',presentNow.length,'terra',`${checkedInToday.length} checked in`)}
+          ${statTile('alert','Allergy Alerts',withAllergies.length,'danger',`${severe.length} severe`)}
+          ${statTile('sparkles','Visitors',visitors.length,'gold','')}
+        </div>
+
+        <div class="grid-actions">
+          ${actionCard('user-plus','New Registration','Add a child &amp; guardians','new-child')}
+          ${actionCard('clipboard',"Today's Check-In",'Check children in &amp; out','goto-checkin')}
+          ${actionCard('book','Full Roster','Browse &amp; edit records','goto-roster')}
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr;gap:1.5rem;" id="dash-bottom">
+          <div class="card" style="padding:1.5rem;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
+              <div>
+                <div class="label-text" style="color:var(--terra);">Recent Sundays</div>
+                <h3 class="font-display" style="font-size:1.25rem;margin:.25rem 0 0;color:var(--ink);">Weekly Attendance</h3>
+              </div>
+              ${icon('calendar','icon')}
+            </div>
+            <div class="chart-bars">
+              ${weeks.map(w => `
+                <div class="chart-bar">
+                  <div style="font-size:.75rem;font-weight:600;color:var(--ink);">${w.count || ''}</div>
+                  <div class="chart-bar-fill" style="height:${Math.max(4,(w.count/maxWeek)*100)}%;background:${w.count===0?'var(--divider)':'linear-gradient(to top,var(--sage-dark),var(--sage))'};"></div>
+                  <div style="font-size:10px;color:var(--ink-soft);">${esc(w.label)}</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <div class="card" style="padding:1.5rem;">
+            <div class="label-text" style="color:var(--danger);margin-bottom:.25rem;">Safety First</div>
+            <h3 class="font-display" style="font-size:1.25rem;margin:0 0 1rem;color:var(--ink);">Active Alerts</h3>
+            <div class="stack" style="gap:.75rem;">
+              ${severe.slice(0,4).map(c => `
+                <div style="padding:.75rem;border-radius:3px;background:var(--danger-bg);">
+                  <div style="display:flex;align-items:flex-start;gap:.5rem;">
+                    ${icon('alert','icon icon-sm')}
+                    <div style="min-width:0;">
+                      <div style="font-weight:600;font-size:.875rem;color:var(--ink);">${esc(c.fullName)}</div>
+                      <div style="font-size:.75rem;color:var(--ink-soft);">Severe: ${esc(c.allergies)}</div>
+                    </div>
+                  </div>
+                </div>
+              `).join('')}
+              ${medical.slice(0,2).map(c => `
+                <div style="padding:.75rem;border-radius:3px;background:var(--cream-soft);">
+                  <div style="display:flex;align-items:flex-start;gap:.5rem;">
+                    ${icon('heart','icon icon-sm')}
+                    <div style="min-width:0;">
+                      <div style="font-weight:600;font-size:.875rem;color:var(--ink);">${esc(c.fullName)}</div>
+                      <div style="font-size:.75rem;color:var(--ink-soft);">${esc(c.medicalConditions)}</div>
+                    </div>
+                  </div>
+                </div>
+              `).join('')}
+              ${severe.length === 0 && medical.length === 0 ? `<p style="font-size:.875rem;font-style:italic;color:var(--ink-soft);">No active alerts. All records up to date.</p>` : ''}
+            </div>
+          </div>
+        </div>
+
+        <style>
+          @media (min-width: 1024px) {
+            #dash-bottom { grid-template-columns: 2fr 1fr !important; }
+          }
+        </style>
+      </div>
+    `;
+  }
+
+  function statTile(iconName, label, value, accent, sub) {
+    const colors = {
+      sage: {bg:'var(--sage-dark)',fg:'var(--cream-soft)'},
+      terra: {bg:'var(--terra)',fg:'var(--cream-soft)'},
+      danger: {bg:'var(--danger-bg)',fg:'var(--danger)'},
+      gold: {bg:'var(--gold)',fg:'var(--ink)'}
+    }[accent];
+    return `
+      <div class="card anim-in" style="padding:1.25rem;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1rem;">
+          <div class="label-text" style="color:var(--ink-soft);">${esc(label)}</div>
+          <div style="width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${colors.bg};color:${colors.fg};">${icon(iconName,'icon icon-sm')}</div>
+        </div>
+        <div class="font-display" style="font-size:2.25rem;font-weight:300;color:var(--ink);">${value}</div>
+        ${sub ? `<div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">${esc(sub)}</div>` : ''}
+      </div>
+    `;
+  }
+
+  function actionCard(iconName, title, desc, action) {
+    return `
+      <button class="card btn" style="padding:1.25rem;text-align:left;border-left:3px solid var(--terra);" data-action="${action}">
+        <div style="display:flex;align-items:flex-start;gap:1rem;">
+          <div style="width:44px;height:44px;border-radius:50%;background:var(--cream);color:var(--sage-dark);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${icon(iconName,'icon icon-lg')}</div>
+          <div>
+            <h3 class="font-display" style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0;">${title}</h3>
+            <p style="font-size:.875rem;margin:.125rem 0 0;color:var(--ink-soft);">${desc}</p>
+          </div>
+        </div>
+      </button>
+    `;
+  }
+
+  // ---------- Roster ----------
+  function renderRoster() {
+    const q = state.search.toLowerCase().trim();
+    const filtered = q ? state.children.filter(c =>
+      c.fullName.toLowerCase().includes(q) ||
+      (c.parentNames||'').toLowerCase().includes(q) ||
+      (c.classroom||'').toLowerCase().includes(q) ||
+      (c.gradeLevel||'').toLowerCase().includes(q)
+    ) : state.children;
+
+    return `
+      <div class="anim-in">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+          <div>
+            <div class="label-text" style="color:var(--terra);">Ministry Records</div>
+            <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">Children's Roster</h2>
+          </div>
+          <div style="display:flex;gap:.5rem;">
+            <button class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="export-csv">${icon('download','icon icon-sm')} CSV</button>
+            <button class="btn btn-primary" style="padding:.5rem 1rem;font-size:.875rem;font-weight:600;display:flex;align-items:center;gap:.5rem;border-radius:3px;" data-action="new-child">${icon('user-plus','icon icon-sm')} Add Child</button>
+          </div>
+        </div>
+
+        <div style="position:relative;margin-bottom:1.25rem;">
+          <span style="position:absolute;left:.75rem;top:50%;transform:translateY(-50%);color:var(--ink-soft);">${icon('search','icon icon-sm')}</span>
+          <input class="input-field" style="padding-left:2.5rem;" placeholder="Search by name, parent, or classroom…" value="${esc(state.search)}" data-action="search-roster">
+        </div>
+
+        ${filtered.length === 0 ? `
+          <div class="card" style="padding:3rem;text-align:center;">
+            ${icon('baby','icon')}
+            <p class="font-display" style="font-size:1.25rem;color:var(--ink);margin:.75rem 0 .25rem;">No children match your search.</p>
+            <p style="font-size:.875rem;color:var(--ink-soft);">Try a different term, or add a new record.</p>
+          </div>
+        ` : `
+          <div class="grid-roster">
+            ${filtered.map(childCard).join('')}
+          </div>
+        `}
+      </div>
+    `;
+  }
+
+  function childCard(c) {
+    const hasAlert = c.allergySeverity === 'Severe' || (c.medicalConditions && c.medicalConditions.trim());
+    const pills = [];
+    if (c.visitorStatus === 'Member') pills.push('<span class="pill pill-sage">Member</span>');
+    if (c.visitorStatus === 'Visitor') pills.push('<span class="pill pill-gold">Visitor</span>');
+    if (c.allergySeverity === 'Severe') pills.push('<span class="pill pill-danger">⚠ Severe Allergy</span>');
+    else if (c.allergySeverity === 'Mild' || c.allergySeverity === 'Moderate') pills.push(`<span class="pill pill-terra">${esc(c.allergySeverity)} Allergy</span>`);
+    return `
+      <button class="card btn anim-in" style="padding:1.25rem;text-align:left;border-left:3px solid ${hasAlert?'var(--danger)':'var(--sage)'};" data-action="view-child" data-id="${c.id}">
+        <div style="display:flex;align-items:flex-start;gap:1rem;">
+          <div class="avatar">${initials(c.fullName)}</div>
+          <div style="min-width:0;flex:1;">
+            <h3 class="font-display" style="font-weight:600;font-size:1.125rem;color:var(--ink);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(c.fullName)}</h3>
+            <div style="font-size:.75rem;color:var(--ink-soft);margin-top:.125rem;">
+              ${calcAge(c.birthdate) ? calcAge(c.birthdate) + ' yrs · ' : ''}${esc(c.gradeLevel || 'No grade')}${c.classroom ? ' · ' + esc(c.classroom) : ''}
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.75rem;">${pills.join('')}</div>
+          </div>
+        </div>
+      </button>
+    `;
+  }
+
+  // ---------- Child Detail ----------
+  function renderChildDetail() {
+    const c = state.children.find(x => x.id === state.selectedId);
+    if (!c) { state.view = 'roster'; return renderRoster(); }
+    const att = state.attendance.filter(a => a.childId === c.id);
+    const hasAlert = c.allergySeverity === 'Severe' || (c.medicalConditions && c.medicalConditions.trim());
+
+    const pills = [];
+    if (c.visitorStatus) pills.push(`<span class="pill pill-${c.visitorStatus === 'Member' ? 'sage' : 'gold'}">${esc(c.visitorStatus)}</span>`);
+    if (c.classroom) pills.push(`<span class="pill pill-terra">${esc(c.classroom)}</span>`);
+
+    return `
+      <div class="anim-in" style="max-width:56rem;margin:0 auto;">
+        <button class="btn" style="background:transparent;font-size:.875rem;margin-bottom:1rem;display:flex;align-items:center;gap:.25rem;color:var(--ink-soft);" data-action="goto-roster">${icon('arrow-left','icon icon-sm')} Back to roster</button>
+
+        ${hasAlert ? `
+          <div style="margin-bottom:1.25rem;padding:1rem;border-radius:3px;border-left:4px solid var(--danger);background:var(--danger-bg);display:flex;align-items:flex-start;gap:.75rem;">
+            ${icon('alert','icon icon-lg')}
+            <div>
+              <div class="font-display" style="font-weight:600;color:var(--danger);">Safety Alert</div>
+              <div style="font-size:.875rem;margin-top:.25rem;color:var(--ink);">
+                ${c.allergySeverity === 'Severe' ? `<div><strong>Severe allergy:</strong> ${esc(c.allergies)}</div>` : ''}
+                ${c.medicalConditions ? `<div><strong>Medical:</strong> ${esc(c.medicalConditions)}</div>` : ''}
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
+        <div class="card" style="padding:1.75rem;margin-bottom:1.25rem;">
+          <div style="display:flex;align-items:flex-start;gap:1.25rem;flex-wrap:wrap;">
+            <div class="avatar avatar-lg">${initials(c.fullName)}</div>
+            <div style="flex:1;min-width:0;">
+              <h2 class="font-display" style="font-size:1.875rem;font-weight:600;color:var(--ink);margin:0;">${esc(c.fullName)}</h2>
+              <div style="display:flex;flex-wrap:wrap;gap:.25rem 1rem;margin-top:.5rem;font-size:.875rem;color:var(--ink-soft);">
+                ${c.birthdate ? `<span>Born ${fmtDate(c.birthdate)} · Age ${calcAge(c.birthdate)}</span>` : ''}
+                ${c.gradeLevel ? `<span>${esc(c.gradeLevel)}</span>` : ''}
+                ${c.school ? `<span>${esc(c.school)}</span>` : ''}
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-top:.75rem;">${pills.join('')}</div>
+            </div>
+            <div style="display:flex;gap:.5rem;">
+              <button class="btn btn-terra" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;border-radius:3px;" data-action="checkin-child" data-id="${c.id}">${icon('login','icon icon-sm')} Check In</button>
+              <button class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="edit-child" data-id="${c.id}">${icon('edit','icon icon-sm')} Edit</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-detail">
+          ${detailSection('Parent &amp; Guardian', 'phone', [
+            ['Names', c.parentNames],
+            ['Phone', c.phoneNumbers],
+            ['Email', c.emails],
+            ['Preferred Contact', c.preferredContact]
+          ])}
+          ${detailSection('Safety &amp; Medical', 'shield', [
+            ['Allergies', c.allergies ? `${esc(c.allergies)} (${esc(c.allergySeverity)})` : '', true],
+            ['Medical Conditions', c.medicalConditions],
+            ['Special Needs', c.specialNeeds],
+            ['Emergency Contact', c.emergencyContact],
+            ['Authorized Pick-Up', c.authorizedPickup]
+          ])}
+          ${detailSection('Communication &amp; Permissions', 'mail', [
+            ['Photo/Media Consent', c.photoConsent ? '✓ Yes' : '✗ No'],
+            ['Newsletter Opt-In', c.newsletterOptIn ? '✓ Yes' : '✗ No']
+          ])}
+          ${detailSection('Ministry &amp; Engagement', 'heart', [
+            ['Status', c.visitorStatus],
+            ['Church Membership', c.churchMembership],
+            ['Prayer Requests', c.prayerRequests]
+          ])}
+        </div>
+
+        <div class="card" style="padding:1.5rem;margin-top:1.25rem;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+            <div>
+              <div class="label-text" style="color:var(--terra);">History</div>
+              <h3 class="font-display" style="font-size:1.25rem;margin:0;color:var(--ink);">Attendance Record</h3>
+            </div>
+            <span style="font-size:.875rem;color:var(--ink-soft);">${att.length} visits</span>
+          </div>
+          ${att.length === 0
+            ? `<p style="font-size:.875rem;font-style:italic;color:var(--ink-soft);">No attendance recorded yet.</p>`
+            : `<div style="max-height:16rem;overflow-y:auto;">
+                ${att.slice(0,15).map(a => `
+                  <div style="display:flex;align-items:center;justify-content:space-between;font-size:.875rem;padding:.5rem 0;border-bottom:1px solid var(--divider);">
+                    <div>
+                      <span style="font-weight:600;color:var(--ink);">${fmtDate(a.date)}</span>
+                      ${a.classroom ? `<span style="margin-left:.5rem;color:var(--ink-soft);">· ${esc(a.classroom)}</span>` : ''}
+                    </div>
+                    <div style="font-size:.75rem;color:var(--ink-soft);">
+                      In: ${fmtTime(a.checkInAt)}${a.checkOutAt ? ` · Out: ${fmtTime(a.checkOutAt)}` : ''}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>`
+          }
+        </div>
+
+        <div style="margin-top:2rem;display:flex;justify-content:flex-end;">
+          <button class="btn-danger" style="font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="delete-child" data-id="${c.id}">${icon('trash','icon icon-sm')} Remove child from roster</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function detailSection(title, iconName, rows) {
+    return `
+      <div class="card" style="padding:1.5rem;">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;">
+          ${icon(iconName,'icon')}
+          <h3 class="font-display" style="font-size:1.125rem;font-weight:600;color:var(--ink);margin:0;">${title}</h3>
+        </div>
+        <div class="stack" style="gap:.625rem;">
+          ${rows.map(([label, value, html]) => `
+            <div>
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-soft);">${esc(label)}</div>
+              <div style="font-size:.875rem;margin-top:.125rem;color:var(--ink);">${value ? (html ? value : esc(value)) : '<span style="font-style:italic;color:var(--ink-soft);">—</span>'}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // ---------- Form ----------
+  function renderForm() {
+    const c = state.editing || emptyChild();
+    const isNew = !c.id;
+    return `
+      <form class="anim-in" style="max-width:56rem;margin:0 auto;" id="child-form">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;">
+          <div>
+            <div class="label-text" style="color:var(--terra);">${isNew ? 'New Registration' : 'Editing'}</div>
+            <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">${isNew ? 'Add a Child' : esc(c.fullName)}</h2>
+          </div>
+          <button type="button" class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;" data-action="cancel-form">Cancel</button>
+        </div>
+
+        ${formSection('Child Information', `
+          ${field('fullName','Full Name','text',c.fullName,{required:true})}
+          <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="two-col">
+            ${field('birthdate','Birthdate','date',c.birthdate)}
+            <div>
+              <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Age</label>
+              <input class="input-field" value="${calcAge(c.birthdate) || ''}" disabled placeholder="From birthdate" id="age-display">
+              ${c.birthdate ? `<div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">Calculated automatically</div>` : ''}
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="two-col">
+            ${field('gradeLevel','Grade Level','text',c.gradeLevel,{placeholder:'e.g. Pre-K, 2nd Grade'})}
+            ${field('school','School','text',c.school)}
+          </div>
+          ${field('classroom','Classroom Assignment','text',c.classroom,{placeholder:'e.g. Lambs, Little Lights'})}
+        `)}
+
+        ${formSection('Parent / Guardian', `
+          ${field('parentNames','Names','text',c.parentNames,{required:true})}
+          <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="two-col">
+            ${field('phoneNumbers','Phone Numbers','text',c.phoneNumbers,{required:true})}
+            ${field('emails','Emails','email',c.emails)}
+          </div>
+          <div>
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Preferred Contact Method</label>
+            <div style="display:flex;gap:.5rem;">
+              ${['Phone','Text','Email'].map(opt => `
+                <button type="button" class="btn" data-action="set-preferred" data-value="${opt}" style="padding:.5rem 1rem;font-size:.875rem;border-radius:3px;flex:1;border:1px solid var(--divider);background:${c.preferredContact===opt?'var(--sage-dark)':'var(--cream-soft)'};color:${c.preferredContact===opt?'var(--cream-soft)':'var(--ink)'};">${opt}</button>
+              `).join('')}
+            </div>
+          </div>
+        `)}
+
+        ${formSection('Safety &amp; Medical', `
+          <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="allergy-grid">
+            ${field('allergies','Allergies','text',c.allergies,{placeholder:'e.g. Peanuts — EpiPen in bag',hint:'Type & action if needed'})}
+            <div>
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Severity</label>
+              <select class="input-field" name="allergySeverity">
+                ${['None','Mild','Moderate','Severe'].map(o => `<option value="${o}"${c.allergySeverity===o?' selected':''}>${o}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          ${field('medicalConditions','Medical Conditions','textarea',c.medicalConditions)}
+          ${field('specialNeeds','Special Needs / Accommodations','textarea',c.specialNeeds)}
+          ${field('emergencyContact','Emergency Contact','text',c.emergencyContact,{required:true,hint:'Name & phone of someone other than the parent'})}
+          ${field('authorizedPickup','Authorized Pick-Up List','textarea',c.authorizedPickup,{hint:'Names of anyone allowed to collect the child'})}
+        `, 'danger')}
+
+        ${formSection('Communication &amp; Permissions', `
+          <div class="stack" style="gap:.75rem;">
+            ${toggle('photoConsent','Photo / Media Consent','May we use photos in ministry communications?',c.photoConsent)}
+            ${toggle('newsletterOptIn','Newsletter Signup','Send occasional ministry updates',c.newsletterOptIn)}
+          </div>
+        `)}
+
+        ${formSection('Ministry &amp; Engagement', `
+          <div>
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Visitor or Member Status</label>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+              ${['Visitor','Member','Regular Attender'].map(opt => `
+                <button type="button" class="btn" data-action="set-status" data-value="${opt}" style="padding:.5rem 1rem;font-size:.875rem;border-radius:3px;flex:1;min-width:8rem;border:1px solid var(--divider);background:${c.visitorStatus===opt?'var(--sage-dark)':'var(--cream-soft)'};color:${c.visitorStatus===opt?'var(--cream-soft)':'var(--ink)'};">${opt}</button>
+              `).join('')}
+            </div>
+          </div>
+          ${field('churchMembership','Church Membership','text',c.churchMembership,{hint:'Home church, if any'})}
+          ${field('prayerRequests','Prayer Requests','textarea',c.prayerRequests)}
+        `)}
+
+        <div style="position:sticky;bottom:0;padding:1rem 0;border-top:1px solid var(--divider);display:flex;gap:.75rem;justify-content:flex-end;background:var(--cream);">
+          <button type="button" class="btn btn-ghost" style="padding:.625rem 1.25rem;" data-action="cancel-form">Cancel</button>
+          <button type="submit" class="btn btn-primary" style="padding:.625rem 1.5rem;font-weight:600;border-radius:3px;display:flex;align-items:center;gap:.5rem;">${icon('check','icon icon-sm')} ${isNew ? 'Add to Roster' : 'Save Changes'}</button>
+        </div>
+
+        <style>
+          @media (min-width: 640px) {
+            .two-col, .allergy-grid { grid-template-columns: repeat(2, 1fr) !important; }
+            .allergy-grid { grid-template-columns: 2fr 1fr !important; }
+          }
+        </style>
+      </form>
+    `;
+  }
+
+  function formSection(title, content, accent) {
+    return `
+      <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;${accent==='danger'?'border-left:3px solid var(--danger);':''}">
+        <h3 class="font-display" style="font-size:1.25rem;font-weight:600;margin:0 0 1.25rem;padding-bottom:.75rem;border-bottom:1px solid var(--divider);color:var(--ink);">${title}</h3>
+        <div class="stack">${content}</div>
+      </div>
+    `;
+  }
+
+  function field(name, label, type, value, opts={}) {
+    const req = opts.required ? '<span style="color:var(--terra);">*</span>' : '';
+    const placeholder = opts.placeholder ? ` placeholder="${esc(opts.placeholder)}"` : '';
+    const hint = opts.hint ? `<div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">${esc(opts.hint)}</div>` : '';
+    const input = type === 'textarea'
+      ? `<textarea class="input-field" name="${name}" rows="2"${placeholder}>${esc(value || '')}</textarea>`
+      : `<input class="input-field" name="${name}" type="${type}" value="${esc(value || '')}"${placeholder}>`;
+    return `
+      <div>
+        <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">${esc(label)} ${req}</label>
+        ${input}
+        ${hint}
+      </div>
+    `;
+  }
+
+  function toggle(name, label, desc, checked) {
+    return `
+      <button type="button" class="btn" data-action="toggle" data-name="${name}" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:.75rem;border-radius:3px;text-align:left;background:var(--cream-soft);border:1px solid var(--divider);">
+        <div>
+          <div style="font-weight:600;font-size:.875rem;color:var(--ink);">${esc(label)}</div>
+          <div style="font-size:.75rem;color:var(--ink-soft);">${esc(desc)}</div>
+        </div>
+        <div style="width:44px;height:24px;border-radius:999px;padding:2px;flex-shrink:0;background:${checked?'var(--sage-dark)':'var(--divider)'};">
+          <div style="width:20px;height:20px;border-radius:50%;background:var(--cream-soft);transition:transform .2s;transform:translateX(${checked?'20px':'0'});"></div>
+        </div>
+        <input type="hidden" name="${name}" value="${checked?'true':'false'}">
+      </button>
+    `;
+  }
+
+  // ---------- Check-in ----------
+  function renderCheckin() {
+    const today = todayISO();
+    const todayRecords = state.attendance.filter(a => a.date === today);
+    const activeToday = todayRecords.filter(a => !a.checkOutAt);
+    const presentIds = new Set(activeToday.map(a => a.childId));
+    const q = state.checkinSearch.toLowerCase().trim();
+    const available = state.children.filter(c => {
+      if (presentIds.has(c.id)) return false;
+      if (!q) return true;
+      return c.fullName.toLowerCase().includes(q) || (c.parentNames||'').toLowerCase().includes(q);
+    });
+
+    return `
+      <div class="anim-in">
+        <div style="margin-bottom:1.5rem;">
+          <div class="label-text" style="color:var(--terra);">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+          <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">Check-In Station</h2>
+        </div>
+
+        <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;border-left:3px solid var(--terra);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+            <h3 class="font-display" style="font-size:1.25rem;margin:0;color:var(--ink);">Present Now <span style="font-size:.875rem;font-family:'Lora',serif;font-weight:400;color:var(--ink-soft);">· ${activeToday.length}</span></h3>
+          </div>
+          ${activeToday.length === 0
+            ? `<p style="font-size:.875rem;font-style:italic;color:var(--ink-soft);">No children currently checked in.</p>`
+            : `<div class="grid-checkin" style="max-height:none;">
+                ${activeToday.map(rec => {
+                  const c = state.children.find(x => x.id === rec.childId);
+                  if (!c) return '';
+                  const hasAlert = c.allergySeverity === 'Severe' || (c.medicalConditions && c.medicalConditions.trim());
+                  return `
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:.75rem;border-radius:3px;background:var(--cream-soft);">
+                      <div style="display:flex;align-items:center;gap:.5rem;min-width:0;">
+                        ${hasAlert ? icon('alert','icon icon-sm') : ''}
+                        <div style="min-width:0;">
+                          <div style="font-weight:600;font-size:.875rem;color:var(--ink);">${esc(c.fullName)}</div>
+                          <div style="font-size:.75rem;color:var(--ink-soft);">In at ${fmtTime(rec.checkInAt)}</div>
+                        </div>
+                      </div>
+                      <button class="btn btn-ghost" style="padding:.375rem .625rem;font-size:.75rem;display:flex;align-items:center;gap:.25rem;flex-shrink:0;" data-action="check-out" data-id="${rec.id}">${icon('logout','icon icon-sm')} Out</button>
+                    </div>
+                  `;
+                }).join('')}
+              </div>`
+          }
+        </div>
+
+        <div class="card" style="padding:1.5rem;">
+          <h3 class="font-display" style="font-size:1.25rem;margin:0 0 1rem;color:var(--ink);">Check In a Child</h3>
+          <div style="position:relative;margin-bottom:1rem;">
+            <span style="position:absolute;left:.75rem;top:50%;transform:translateY(-50%);color:var(--ink-soft);">${icon('search','icon icon-sm')}</span>
+            <input class="input-field" style="padding-left:2.5rem;" placeholder="Search by name or parent…" value="${esc(state.checkinSearch)}" data-action="search-checkin">
+          </div>
+          ${available.length === 0
+            ? `<p style="font-size:.875rem;font-style:italic;color:var(--ink-soft);">${state.children.length === 0 ? 'No children in the roster yet. Add one from the Roster tab.' : 'All children are currently checked in, or none match your search.'}</p>`
+            : `<div class="grid-checkin">
+                ${available.map(c => {
+                  const hasAlert = c.allergySeverity === 'Severe' || (c.medicalConditions && c.medicalConditions.trim());
+                  return `
+                    <button class="btn" style="display:flex;align-items:center;justify-content:space-between;padding:.75rem;border-radius:3px;text-align:left;background:var(--paper);border:1px solid var(--divider);" data-action="check-in" data-id="${c.id}">
+                      <div style="display:flex;align-items:center;gap:.5rem;min-width:0;">
+                        ${hasAlert ? icon('alert','icon icon-sm') : ''}
+                        <div style="min-width:0;">
+                          <div style="font-weight:600;font-size:.875rem;color:var(--ink);">${esc(c.fullName)}</div>
+                          <div style="font-size:.75rem;color:var(--ink-soft);">${esc(c.gradeLevel || '—')}${c.classroom ? ' · ' + esc(c.classroom) : ''}</div>
+                        </div>
+                      </div>
+                      ${icon('login','icon icon-sm')}
+                    </button>
+                  `;
+                }).join('')}
+              </div>`
+          }
+        </div>
+      </div>
+    `;
+  }
+
+  // ============================================================
+  // Handlers
+  // ============================================================
+  function attachHandlers() {
+    // Delegated click
+    document.getElementById('app').addEventListener('click', onClick);
+    document.getElementById('app').addEventListener('input', onInput);
+    document.getElementById('app').addEventListener('change', onChange);
+
+    // Child form submission
+    const form = document.getElementById('child-form');
+    if (form) form.addEventListener('submit', onFormSubmit);
+
+    // Login form submission
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) loginForm.addEventListener('submit', onLoginSubmit);
+  }
+
+  function onLoginSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    actions.connect(fd.get('backendUrl'), fd.get('passcode'));
+  }
+
+  function onClick(e) {
+    const target = e.target.closest('[data-action]');
+    // Close settings dropdown on outside click
+    if (state.showSettings && !target) {
+      if (!e.target.closest('[data-action="toggle-settings"]')) {
+        state.showSettings = false;
+        render();
+      }
+      return;
+    }
+    if (!target) return;
+    const action = target.dataset.action;
+    const id = target.dataset.id;
+
+    switch (action) {
+      case 'goto': actions.goto(target.dataset.view); break;
+      case 'goto-roster': actions.goto('roster'); break;
+      case 'goto-checkin': actions.goto('checkin'); break;
+      case 'new-child': actions.goto('form', {editing: emptyChild()}); break;
+      case 'view-child': actions.goto('child', {selectedId: id}); break;
+      case 'edit-child': {
+        const c = state.children.find(x => x.id === id);
+        actions.goto('form', {editing: Object.assign({}, c)});
+        break;
+      }
+      case 'delete-child': actions.deleteChild(id); break;
+      case 'checkin-child': actions.checkIn(id); actions.goto('checkin'); break;
+      case 'check-in': actions.checkIn(id); break;
+      case 'check-out': actions.checkOut(id); break;
+      case 'cancel-form': actions.goto(state.selectedId ? 'child' : 'roster'); break;
+      case 'export-json': actions.exportJSON(); break;
+      case 'export-csv': actions.exportCSV(); break;
+      case 'toggle-settings': actions.toggleSettings(); break;
+      case 'disconnect': actions.disconnect(); break;
+      case 'refresh': actions.refresh(); break;
+      case 'show-login': state.showSettings = false; state.view = 'login'; render(); break;
+      case 'try-demo': state.view = 'dashboard'; render(); break;
+      case 'set-preferred': {
+        state.editing = state.editing || emptyChild();
+        state.editing.preferredContact = target.dataset.value;
+        captureFormInputs();
+        render();
+        break;
+      }
+      case 'set-status': {
+        state.editing = state.editing || emptyChild();
+        state.editing.visitorStatus = target.dataset.value;
+        captureFormInputs();
+        render();
+        break;
+      }
+      case 'toggle': {
+        state.editing = state.editing || emptyChild();
+        const name = target.dataset.name;
+        state.editing[name] = !state.editing[name];
+        captureFormInputs();
+        render();
+        break;
+      }
+    }
+  }
+
+  function onInput(e) {
+    const target = e.target;
+    if (target.dataset.action === 'search-roster') {
+      state.search = target.value;
+      // Re-render only the list area — but simplest: full re-render after slight delay
+      clearTimeout(window._searchT);
+      window._searchT = setTimeout(() => { render(); const inp = document.querySelector('[data-action="search-roster"]'); if (inp) { inp.focus(); inp.setSelectionRange(state.search.length, state.search.length); } }, 100);
+    } else if (target.dataset.action === 'search-checkin') {
+      state.checkinSearch = target.value;
+      clearTimeout(window._searchT);
+      window._searchT = setTimeout(() => { render(); const inp = document.querySelector('[data-action="search-checkin"]'); if (inp) { inp.focus(); inp.setSelectionRange(state.checkinSearch.length, state.checkinSearch.length); } }, 100);
+    } else if (target.name === 'birthdate') {
+      // Live-update age display
+      const age = calcAge(target.value);
+      const ageEl = document.getElementById('age-display');
+      if (ageEl) ageEl.value = age || '';
+    }
+  }
+
+  function onChange(e) {
+    const target = e.target;
+    if (target.dataset.action === 'import-json') {
+      const file = target.files && target.files[0];
+      if (file) actions.importJSON(file);
+    }
+  }
+
+  function captureFormInputs() {
+    const form = document.getElementById('child-form');
+    if (!form) return;
+    const fd = new FormData(form);
+    const base = state.editing || emptyChild();
+    for (const [k, v] of fd.entries()) {
+      if (k === 'photoConsent' || k === 'newsletterOptIn') continue; // handled separately
+      base[k] = v;
+    }
+    state.editing = base;
+  }
+
+  function onFormSubmit(e) {
+    e.preventDefault();
+    const form = e.target;
+    const fd = new FormData(form);
+    const data = Object.assign({}, state.editing || emptyChild());
+    for (const [k, v] of fd.entries()) {
+      if (k === 'photoConsent' || k === 'newsletterOptIn') {
+        data[k] = v === 'true';
+      } else {
+        data[k] = typeof v === 'string' ? v.trim() : v;
+      }
+    }
+    // Preserve button-driven fields from state.editing
+    if (state.editing) {
+      data.preferredContact = state.editing.preferredContact || data.preferredContact;
+      data.visitorStatus = state.editing.visitorStatus || data.visitorStatus;
+      data.photoConsent = state.editing.photoConsent != null ? state.editing.photoConsent : (data.photoConsent === 'true');
+      data.newsletterOptIn = state.editing.newsletterOptIn != null ? state.editing.newsletterOptIn : (data.newsletterOptIn === 'true');
+      if (state.editing.id) data.id = state.editing.id;
+      if (state.editing.createdAt) data.createdAt = state.editing.createdAt;
+    }
+    actions.saveChild(data);
+  }
+
+  // Boot
+  init();
+  </script>
+</body>
+</html>

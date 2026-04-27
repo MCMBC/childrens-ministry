@@ -126,27 +126,38 @@
   const KEYS = {
     CHILDREN: 'cc:children',
     ATTENDANCE: 'cc:attendance',
-    CONFIG: 'cc:config',          // { backendUrl, passcode }
-    PENDING: 'cc:pending'         // queue of actions to retry when back online
+    CONFIG: 'cc:config',          // { backendUrl, passcode } — saved once per device
+    AUTH: 'cc:auth',              // { username, fullName, role, sessionToken } — per session
+    PENDING: 'cc:pending',        // queue of actions to retry when back online
+    USERS_CACHE: 'cc:users'       // last-fetched users list (Full role only)
   };
 
   // State
   const state = {
     children: [],
     attendance: [],
+    users: [],                    // populated when User Maintenance is opened
     view: 'dashboard',
     selectedId: null,
-    editing: null,
+    editing: null,                // child being edited
+    editingUser: null,            // user being edited
     search: '',
     checkinSearch: '',
-    // Backend
-    config: null,                 // null until configured
-    online: true,                 // last sync attempt succeeded
-    syncing: false,               // request in flight
-    pendingCount: 0,              // queued writes waiting to retry
+    // Backend connection
+    config: null,                 // null until device is set up (URL + passcode)
+    // Authentication
+    auth: null,                   // null until logged in
+    // Sync state
+    online: true,
+    syncing: false,
+    pendingCount: 0,
     showSettings: false,
-    bootError: null,              // shown on login screen
-    loginDraft: { backendUrl: '', passcode: '' }  // preserves input across failed attempts
+    showMaintMenu: false,         // Maintenance dropdown
+    // Login/setup screen state
+    bootError: null,
+    loginError: null,
+    setupDraft: { backendUrl: '', passcode: '' },
+    loginDraft: { username: '', password: '' }
   };
 
   // Storage
@@ -169,7 +180,12 @@
   const api = {
     async get() {
       if (!state.config) throw new Error('Not configured');
-      const url = state.config.backendUrl + '?passcode=' + encodeURIComponent(state.config.passcode);
+      const params = new URLSearchParams({ passcode: state.config.passcode });
+      if (state.auth) {
+        params.set('authUsername', state.auth.username);
+        params.set('sessionToken', state.auth.sessionToken);
+      }
+      const url = state.config.backendUrl + '?' + params.toString();
       const res = await fetch(url, { method: 'GET', redirect: 'follow' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
@@ -178,12 +194,18 @@
     },
     async post(action, payload) {
       if (!state.config) throw new Error('Not configured');
-      // Apps Script requires text/plain to avoid CORS preflight
+      // Build body with auth fields first, then merge payload so payload values win
+      const body = { action, passcode: state.config.passcode };
+      if (state.auth && action !== 'login') {
+        body.authUsername = state.auth.username;
+        body.sessionToken = state.auth.sessionToken;
+      }
+      Object.assign(body, payload || {});
       const res = await fetch(state.config.backendUrl, {
         method: 'POST',
         redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(Object.assign({ action, passcode: state.config.passcode }, payload))
+        body: JSON.stringify(body)
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
@@ -311,39 +333,49 @@
   // Boot
   // ============================================================
   async function init() {
-    // Load config from storage
     state.config = store.load(KEYS.CONFIG, null);
+    state.auth = store.load(KEYS.AUTH, null);
     state.pendingCount = store.load(KEYS.PENDING, []).length;
 
-    // If no config, show login screen with demo data
+    // No device setup yet — show setup screen with demo data
     if (!state.config) {
       state.children = store.load(KEYS.CHILDREN, null) || seed;
       state.attendance = store.load(KEYS.ATTENDANCE, []);
+      state.view = 'setup';
+      render();
+      return;
+    }
+
+    // Device set up but no logged-in user — show login screen
+    if (!state.auth) {
       state.view = 'login';
       render();
       return;
     }
 
-    // Load from cache immediately for fast paint
+    // Both — load from cache and try to refresh
     state.children = store.load(KEYS.CHILDREN, []);
     state.attendance = store.load(KEYS.ATTENDANCE, []);
     state.view = 'dashboard';
     render();
 
-    // Then try to sync from backend
     await refreshFromBackend();
-    // Retry any pending writes
     await retryPending();
   }
 
   async function refreshFromBackend() {
-    if (!state.config) return;
+    if (!state.config || !state.auth) return;
     state.syncing = true;
     updateHeaderStatus();
     try {
       const data = await api.get();
       state.children = data.children || [];
       state.attendance = data.attendance || [];
+      // Server may have updated the user record (e.g. role change)
+      if (data.user && state.auth && data.user.username === state.auth.username) {
+        state.auth = Object.assign({}, state.auth, data.user);
+        store.save(KEYS.AUTH, state.auth);
+      }
       saveCache();
       state.online = true;
       state.syncing = false;
@@ -353,7 +385,17 @@
       state.online = false;
       state.syncing = false;
       updateHeaderStatus();
-      console.warn('Backend fetch failed, using cached data:', err.message);
+      // If session expired or user was deactivated, force re-login
+      const msg = String(err.message || err);
+      if (/Session expired|User not found|inactive/i.test(msg)) {
+        toast(msg, 'warn');
+        state.auth = null;
+        store.remove(KEYS.AUTH);
+        state.view = 'login';
+        render();
+        return;
+      }
+      console.warn('Backend fetch failed, using cached data:', msg);
     }
   }
 
@@ -382,10 +424,10 @@
       render();
     },
 
-    async connect(backendUrl, passcode) {
+    async setupDevice(backendUrl, passcode) {
       backendUrl = (backendUrl || '').trim();
       passcode = (passcode || '').trim();
-      state.loginDraft = { backendUrl, passcode: '' }; // preserve URL but never the passcode
+      state.setupDraft = { backendUrl, passcode: '' };
       if (!backendUrl || !passcode) {
         state.bootError = 'Both Web App URL and passcode are required.';
         render();
@@ -396,44 +438,85 @@
         render();
         return;
       }
+      // Save config provisionally so api.post can use it for the login attempt
       state.config = { backendUrl, passcode };
       state.bootError = null;
+      // Skip to login screen — passcode is verified there during sign-in
+      state.view = 'login';
+      state.setupDraft = { backendUrl: '', passcode: '' };
+      store.save(KEYS.CONFIG, state.config);
+      render();
+    },
+
+    async signIn(username, password) {
+      username = (username || '').trim();
+      password = password || '';
+      state.loginDraft = { username, password: '' };
+      if (!username || !password) {
+        state.loginError = 'Username and password are required.';
+        render();
+        return;
+      }
       state.syncing = true;
+      state.loginError = null;
       render();
       try {
-        const data = await api.get();
-        // Success — save config, load data
-        store.save(KEYS.CONFIG, state.config);
-        state.children = data.children || [];
-        state.attendance = data.attendance || [];
-        saveCache();
-        state.online = true;
+        const result = await api.post('login', { username, password });
+        state.auth = {
+          username: result.user.username,
+          fullName: result.user.fullName,
+          role: result.user.role,
+          email: result.user.email,
+          sessionToken: result.sessionToken
+        };
+        store.save(KEYS.AUTH, state.auth);
         state.syncing = false;
         state.view = 'dashboard';
-        state.loginDraft = { backendUrl: '', passcode: '' };
-        toast('Connected to your sheet.');
+        state.loginDraft = { username: '', password: '' };
+        toast(`Welcome, ${result.user.fullName || result.user.username}.`);
         render();
-        retryPending();
+        // Now load fresh data with the new session
+        await refreshFromBackend();
+        await retryPending();
       } catch (err) {
-        state.config = null;
         state.syncing = false;
-        state.bootError = 'Could not connect: ' + err.message + '. Check your URL and passcode, and make sure the Web App is deployed with access set to "Anyone".';
+        const msg = String(err.message || err);
+        // If passcode is wrong, the very first thing the backend complains about is the passcode
+        if (/Invalid passcode/i.test(msg)) {
+          state.loginError = 'The device passcode is incorrect. Click "Change device settings" below to update it.';
+        } else {
+          state.loginError = msg.replace(/^Error:\s*/, '');
+        }
         render();
       }
     },
 
-    disconnect() {
-      if (!confirm('Disconnect from Google Sheets? Local cache will be cleared and you\'ll be asked for the URL and passcode again.')) return;
+    signOut() {
+      if (!confirm('Sign out? You\'ll need to enter your username and password again.')) return;
+      state.auth = null;
+      store.remove(KEYS.AUTH);
+      state.showSettings = false;
+      state.showMaintMenu = false;
+      state.view = 'login';
+      render();
+    },
+
+    forgetDevice() {
+      if (!confirm('Forget device settings? You\'ll need the Web App URL and passcode again.')) return;
       store.remove(KEYS.CONFIG);
+      store.remove(KEYS.AUTH);
       store.remove(KEYS.CHILDREN);
       store.remove(KEYS.ATTENDANCE);
       store.remove(KEYS.PENDING);
+      store.remove(KEYS.USERS_CACHE);
       state.config = null;
+      state.auth = null;
       state.children = seed;
       state.attendance = [];
+      state.users = [];
       state.pendingCount = 0;
       state.showSettings = false;
-      state.view = 'login';
+      state.view = 'setup';
       render();
     },
 
@@ -441,6 +524,83 @@
       await refreshFromBackend();
       await retryPending();
       toast('Refreshed from sheet');
+    },
+
+    // ---------- User Maintenance ----------
+
+    async loadUsers() {
+      if (!state.auth || state.auth.role !== 'Full') return;
+      try {
+        const result = await api.post('listUsers', {});
+        state.users = result.users || [];
+        store.save(KEYS.USERS_CACHE, state.users);
+        render();
+      } catch (err) {
+        toast('Could not load users: ' + err.message, 'error');
+      }
+    },
+
+    async saveUser(form, password) {
+      if (!form.username) { toast('Username is required', 'error'); return false; }
+      if (!form.fullName) { toast('Full name is required', 'error'); return false; }
+      try {
+        let result;
+        if (form._isNew) {
+          if (!password) { toast('Password is required for new users', 'error'); return false; }
+          result = await api.post('addUser', { user: form, password });
+        } else {
+          result = await api.post('updateUser', { user: form });
+        }
+        toast(form._isNew ? `Added ${form.username}` : `Updated ${form.username}`);
+        state.editingUser = null;
+        await actions.loadUsers();
+        return true;
+      } catch (err) {
+        toast(err.message, 'error');
+        return false;
+      }
+    },
+
+    async resetPassword(username) {
+      const newPwd = prompt(`Enter a new password for ${username}:\n\n(They should change it themselves after logging in.)`);
+      if (!newPwd) return;
+      if (newPwd.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
+      try {
+        await api.post('resetUserPassword', { username, newPassword: newPwd });
+        toast(`Password reset for ${username}`);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    },
+
+    async deleteUser(username) {
+      if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+      try {
+        await api.post('deleteUser', { username });
+        toast(`Deleted ${username}`, 'warn');
+        await actions.loadUsers();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    },
+
+    async changeMyPassword() {
+      const current = prompt('Enter your current password:');
+      if (!current) return;
+      const next = prompt('Enter your new password (minimum 6 characters):');
+      if (!next) return;
+      if (next.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
+      const confirmNext = prompt('Confirm your new password:');
+      if (next !== confirmNext) { toast('Passwords don\'t match', 'error'); return; }
+      try {
+        const result = await api.post('changeOwnPassword', { currentPassword: current, newPassword: next });
+        // Backend returned a fresh session token (the old one is invalid now)
+        state.auth = Object.assign({}, state.auth, { sessionToken: result.sessionToken });
+        store.save(KEYS.AUTH, state.auth);
+        toast('Password changed.');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
     },
 
     async saveChild(form) {
@@ -564,12 +724,17 @@
   }
 
   function layout() {
-    // Login/setup screen — shown when no backend is configured
+    // Device setup screen — first time on this device
+    if (state.view === 'setup') {
+      return renderSetup();
+    }
+    // Sign-in screen — device set up but no logged-in user
     if (state.view === 'login') {
       return renderLogin();
     }
 
-    const connected = !!state.config;
+    const isFull = state.auth && state.auth.role === 'Full';
+    const userLabel = state.auth ? (state.auth.fullName || state.auth.username) : '';
     return `
       <header style="border-bottom: 1px solid var(--divider); background: var(--paper);">
         <div style="max-width: 80rem; margin: 0 auto; padding: 1.25rem 1.5rem;">
@@ -585,26 +750,27 @@
             </div>
             <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
               ${syncStatusHTML()}
-              ${connected ? `<button class="btn btn-ghost" style="padding:.5rem;font-size:.875rem;display:flex;align-items:center;" data-action="refresh" title="Refresh from sheet">${icon('refresh','icon icon-sm')}</button>` : ''}
+              <button class="btn btn-ghost" style="padding:.5rem;font-size:.875rem;display:flex;align-items:center;" data-action="refresh" title="Refresh from sheet">${icon('refresh','icon icon-sm')}</button>
               <button class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="export-json" title="Download a JSON backup">${icon('download','icon icon-sm')} Backup</button>
               <label class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;cursor:pointer;" title="Restore from a backup file">
                 ${icon('upload','icon icon-sm')} Restore
                 <input type="file" accept="application/json" class="hidden" data-action="import-json">
               </label>
               <div style="position:relative;">
-                <button class="btn btn-ghost" style="padding:.5rem;font-size:.875rem;display:flex;align-items:center;" data-action="toggle-settings" title="Settings">${icon('settings','icon icon-sm')}</button>
+                <button class="btn btn-ghost" style="padding:.5rem .625rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="toggle-settings" title="Account &amp; settings">
+                  <div style="width:24px;height:24px;border-radius:50%;background:var(--sage-dark);color:var(--cream-soft);display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-weight:600;font-size:.7rem;">${esc((userLabel || '?').slice(0,1).toUpperCase())}</div>
+                  <span style="max-width:8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(userLabel)}</span>
+                </button>
                 ${state.showSettings ? `
                   <div style="position:absolute;right:0;top:100%;margin-top:.5rem;background:var(--paper);border:1px solid var(--divider);border-radius:4px;box-shadow:0 10px 25px rgba(0,0,0,.1);min-width:18rem;z-index:40;padding:1rem;">
-                    <div class="label-text" style="color:var(--ink-soft);margin-bottom:.5rem;">Backend</div>
-                    ${connected ? `
-                      <div style="font-size:.75rem;word-break:break-all;color:var(--ink-soft);margin-bottom:.25rem;">Connected</div>
-                      <div style="font-size:.7rem;word-break:break-all;color:var(--ink-soft);margin-bottom:.75rem;opacity:.7;">${esc(state.config.backendUrl.slice(0, 60))}…</div>
-                      <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.5rem;" data-action="refresh">${icon('refresh','icon icon-sm')} Refresh from sheet</button>
-                      <button class="btn" style="width:100%;padding:.5rem;font-size:.875rem;color:var(--danger);border:1px solid var(--divider);background:transparent;" data-action="disconnect">${icon('logout','icon icon-sm')} Disconnect</button>
-                    ` : `
-                      <div style="font-size:.75rem;color:var(--terra);margin-bottom:.75rem;">Demo mode — no backend</div>
-                      <button class="btn btn-primary" style="width:100%;padding:.5rem;font-size:.875rem;border-radius:3px;" data-action="show-login">Connect Google Sheet</button>
-                    `}
+                    <div class="label-text" style="color:var(--ink-soft);margin-bottom:.5rem;">Account</div>
+                    <div style="font-size:.875rem;font-weight:600;color:var(--ink);">${esc(userLabel)}</div>
+                    <div style="font-size:.75rem;color:var(--ink-soft);margin-bottom:.75rem;">${esc(state.auth.role)} role · @${esc(state.auth.username)}</div>
+                    <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.5rem;" data-action="change-my-password">${icon('lock','icon icon-sm')} Change password</button>
+                    <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.75rem;color:var(--danger);" data-action="sign-out">${icon('logout','icon icon-sm')} Sign out</button>
+                    <div class="label-text" style="color:var(--ink-soft);margin-bottom:.5rem;border-top:1px solid var(--divider);padding-top:.75rem;">Device</div>
+                    <div style="font-size:.7rem;word-break:break-all;color:var(--ink-soft);margin-bottom:.5rem;opacity:.7;">${esc(state.config.backendUrl.slice(0, 60))}…</div>
+                    <button class="btn" style="width:100%;padding:.5rem;font-size:.8rem;color:var(--ink-soft);border:1px solid var(--divider);background:transparent;" data-action="forget-device">Forget device settings</button>
                   </div>
                 ` : ''}
               </div>
@@ -612,10 +778,23 @@
           </div>
         </div>
         <nav style="max-width:80rem;margin:0 auto;padding:0 1.5rem;">
-          <div style="display:flex;gap:.25rem;overflow-x:auto;">
+          <div style="display:flex;gap:.25rem;overflow-x:auto;align-items:center;">
             ${tab('dashboard','Overview','home')}
             ${tab('roster','Roster','users')}
             ${tab('checkin','Check-In','clipboard')}
+            ${isFull ? `
+              <div style="position:relative;">
+                <button class="btn ${state.view === 'users' || state.view === 'user-form' ? 'tab-active' : 'tab-inactive'}" style="background:transparent;padding:.75rem 1rem;font-size:.875rem;font-weight:500;display:flex;align-items:center;gap:.5rem;white-space:nowrap;" data-action="toggle-maint">
+                  ${icon('settings','icon icon-sm')} Maintenance
+                  <svg class="icon icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                ${state.showMaintMenu ? `
+                  <div style="position:absolute;left:0;top:100%;margin-top:.25rem;background:var(--paper);border:1px solid var(--divider);border-radius:4px;box-shadow:0 10px 25px rgba(0,0,0,.1);min-width:14rem;z-index:40;padding:.375rem;">
+                    <button class="btn" style="width:100%;text-align:left;padding:.625rem .75rem;font-size:.875rem;background:transparent;display:flex;align-items:center;gap:.5rem;color:var(--ink);" data-action="goto-users">${icon('users','icon icon-sm')} User Maintenance</button>
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
           </div>
         </nav>
       </header>
@@ -630,9 +809,7 @@
           "Let the little children come to me." — Matthew 19:14
         </p>
         <p style="font-size:.75rem;margin-top:.75rem;color:var(--ink-soft);">
-          ${connected
-            ? 'Records live in your shared Google Sheet. Offline changes sync automatically when you reconnect.'
-            : 'Demo mode. Data is stored locally — connect a Google Sheet from Settings to sync across devices.'}
+          Records live in your shared Google Sheet. Offline changes sync automatically when you reconnect.
         </p>
       </footer>
     `;
@@ -650,13 +827,15 @@
       case 'checkin': return renderCheckin();
       case 'child': return renderChildDetail();
       case 'form': return renderForm();
+      case 'users': return renderUsers();
+      case 'user-form': return renderUserForm();
       default: return renderDashboard();
     }
   }
 
-  // ---------- Login / Setup ----------
-  function renderLogin() {
-    const savedUrl = (state.loginDraft && state.loginDraft.backendUrl) || (state.config && state.config.backendUrl) || '';
+  // ---------- Device Setup (one-time URL + passcode) ----------
+  function renderSetup() {
+    const savedUrl = (state.setupDraft && state.setupDraft.backendUrl) || (state.config && state.config.backendUrl) || '';
     return `
       <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem 1.5rem;">
         <div style="width:100%;max-width:28rem;" class="anim-in">
@@ -666,15 +845,17 @@
             </div>
             <div class="ornament" style="font-size:11px;letter-spacing:.3em;text-transform:uppercase;margin-bottom:.5rem;color:var(--terra);">Mt. Calvary M.B. Church</div>
             <h1 class="font-display" style="font-size:2rem;font-weight:600;margin:0;color:var(--ink);">Children's Ministry</h1>
-            <p style="margin-top:.5rem;color:var(--ink-soft);font-size:.9rem;">Connect to your Google Sheet to begin.</p>
+            <p style="margin-top:.5rem;color:var(--ink-soft);font-size:.9rem;">First-time device setup</p>
           </div>
 
-          <form class="card" style="padding:1.75rem;" id="login-form">
+          <form class="card" style="padding:1.75rem;" id="setup-form">
             ${state.bootError ? `
               <div style="margin-bottom:1rem;padding:.75rem;border-radius:3px;background:var(--danger-bg);color:var(--danger);font-size:.875rem;">
                 ${esc(state.bootError)}
               </div>
             ` : ''}
+
+            <p style="font-size:.825rem;color:var(--ink-soft);margin:0 0 1.25rem;line-height:1.5;">Enter your church's Web App URL and shared passcode to set up this device. You'll only do this once — after that, you'll just sign in with your username and password.</p>
 
             <div style="margin-bottom:1rem;">
               <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Web App URL</label>
@@ -683,25 +864,219 @@
             </div>
 
             <div style="margin-bottom:1.25rem;">
-              <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Passcode</label>
+              <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Device Passcode</label>
               <input class="input-field" name="passcode" type="password" placeholder="Enter the shared passcode" required>
-              <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">Set in line 15 of your Apps Script file.</div>
+              <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">Set in line 17 of your Apps Script file.</div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="width:100%;padding:.75rem;font-weight:600;border-radius:3px;display:flex;align-items:center;justify-content:center;gap:.5rem;">
+              ${icon('lock','icon icon-sm')} Continue to Sign In
+            </button>
+          </form>
+
+          <p style="text-align:center;font-size:.75rem;margin-top:1.5rem;color:var(--ink-soft);">
+            Don't have this set up yet? See the <strong>SETUP.md</strong> guide.
+          </p>
+        </div>
+      </div>
+    `;
+  }
+
+  // ---------- Sign-In (username + password) ----------
+  function renderLogin() {
+    const draftUser = (state.loginDraft && state.loginDraft.username) || '';
+    return `
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem 1.5rem;">
+        <div style="width:100%;max-width:28rem;" class="anim-in">
+          <div style="text-align:center;margin-bottom:2rem;">
+            <div style="width:64px;height:64px;border-radius:50%;background:var(--sage-dark);display:inline-flex;align-items:center;justify-content:center;color:var(--cream-soft);margin-bottom:1rem;">
+              ${icon('sparkles','icon icon-lg')}
+            </div>
+            <div class="ornament" style="font-size:11px;letter-spacing:.3em;text-transform:uppercase;margin-bottom:.5rem;color:var(--terra);">Mt. Calvary M.B. Church</div>
+            <h1 class="font-display" style="font-size:2rem;font-weight:600;margin:0;color:var(--ink);">Children's Ministry</h1>
+            <p style="margin-top:.5rem;color:var(--ink-soft);font-size:.9rem;">Sign in to continue</p>
+          </div>
+
+          <form class="card" style="padding:1.75rem;" id="login-form">
+            ${state.loginError ? `
+              <div style="margin-bottom:1rem;padding:.75rem;border-radius:3px;background:var(--danger-bg);color:var(--danger);font-size:.875rem;">
+                ${esc(state.loginError)}
+              </div>
+            ` : ''}
+
+            <div style="margin-bottom:1rem;">
+              <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Username</label>
+              <input class="input-field" name="username" type="text" autocomplete="username" placeholder="e.g. dpastor" value="${esc(draftUser)}" required autofocus>
+            </div>
+
+            <div style="margin-bottom:1.25rem;">
+              <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Password</label>
+              <input class="input-field" name="password" type="password" autocomplete="current-password" required>
             </div>
 
             <button type="submit" class="btn btn-primary" style="width:100%;padding:.75rem;font-weight:600;border-radius:3px;display:flex;align-items:center;justify-content:center;gap:.5rem;${state.syncing ? 'opacity:.6;' : ''}" ${state.syncing ? 'disabled' : ''}>
-              ${state.syncing ? icon('refresh','icon icon-sm') + ' Connecting…' : icon('lock','icon icon-sm') + ' Connect'}
+              ${state.syncing ? icon('refresh','icon icon-sm') + ' Signing in…' : icon('login','icon icon-sm') + ' Sign In'}
             </button>
 
             <div style="text-align:center;margin-top:1rem;">
-              <button type="button" class="btn" style="background:transparent;font-size:.8rem;color:var(--ink-soft);text-decoration:underline;padding:.25rem;" data-action="try-demo">Or try the demo without connecting</button>
+              <button type="button" class="btn" style="background:transparent;font-size:.8rem;color:var(--ink-soft);text-decoration:underline;padding:.25rem;" data-action="forget-device">Change device settings</button>
             </div>
           </form>
 
           <p style="text-align:center;font-size:.75rem;margin-top:1.5rem;color:var(--ink-soft);">
-            Don't have this set up yet? See the <strong>SETUP.md</strong> guide included with this app.
+            Don't have an account? Ask an administrator to create one for you.
           </p>
         </div>
       </div>
+    `;
+  }
+
+  // ---------- User Maintenance ----------
+  function renderUsers() {
+    const users = state.users || [];
+    const me = state.auth && state.auth.username;
+    return `
+      <div class="anim-in">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+          <div>
+            <div class="label-text" style="color:var(--terra);">Maintenance</div>
+            <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">User Maintenance</h2>
+            <p style="font-size:.875rem;margin:.25rem 0 0;color:var(--ink-soft);">Manage who can sign in to this app.</p>
+          </div>
+          <div style="display:flex;gap:.5rem;">
+            <button class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="refresh-users">${icon('refresh','icon icon-sm')} Refresh</button>
+            <button class="btn btn-primary" style="padding:.5rem 1rem;font-size:.875rem;font-weight:600;display:flex;align-items:center;gap:.5rem;border-radius:3px;" data-action="new-user">${icon('user-plus','icon icon-sm')} Add User</button>
+          </div>
+        </div>
+
+        ${users.length === 0 ? `
+          <div class="card" style="padding:3rem;text-align:center;">
+            <p style="font-size:.875rem;color:var(--ink-soft);">No users loaded yet. Click Refresh, or add a new user to begin.</p>
+          </div>
+        ` : `
+          <div class="card" style="overflow:hidden;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead>
+                <tr style="background:var(--cream);">
+                  <th style="text-align:left;padding:.875rem 1rem;font-family:'Fraunces',serif;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink);border-bottom:1px solid var(--divider);">User</th>
+                  <th style="text-align:left;padding:.875rem 1rem;font-family:'Fraunces',serif;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink);border-bottom:1px solid var(--divider);" class="hide-mobile">Email</th>
+                  <th style="text-align:left;padding:.875rem 1rem;font-family:'Fraunces',serif;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink);border-bottom:1px solid var(--divider);">Role</th>
+                  <th style="text-align:left;padding:.875rem 1rem;font-family:'Fraunces',serif;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink);border-bottom:1px solid var(--divider);">Status</th>
+                  <th style="text-align:right;padding:.875rem 1rem;font-family:'Fraunces',serif;font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:var(--ink);border-bottom:1px solid var(--divider);">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${users.map(u => {
+                  const isMe = u.username.toLowerCase() === (me || '').toLowerCase();
+                  return `
+                    <tr style="border-bottom:1px solid var(--divider);">
+                      <td style="padding:.875rem 1rem;vertical-align:middle;">
+                        <div style="display:flex;align-items:center;gap:.625rem;">
+                          <div class="avatar avatar-sm" style="width:32px;height:32px;font-size:.8rem;">${esc((u.fullName||u.username).slice(0,1).toUpperCase())}</div>
+                          <div>
+                            <div style="font-weight:600;font-size:.875rem;color:var(--ink);">${esc(u.fullName || u.username)}${isMe ? ' <span style="font-weight:400;color:var(--terra);font-size:.75rem;">(you)</span>' : ''}</div>
+                            <div style="font-size:.75rem;color:var(--ink-soft);">@${esc(u.username)}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td style="padding:.875rem 1rem;vertical-align:middle;font-size:.875rem;color:var(--ink-soft);" class="hide-mobile">${esc(u.email || '—')}</td>
+                      <td style="padding:.875rem 1rem;vertical-align:middle;"><span class="pill pill-${u.role === 'Full' ? 'sage' : 'terra'}">${esc(u.role)}</span></td>
+                      <td style="padding:.875rem 1rem;vertical-align:middle;">${u.active ? '<span class="pill pill-sage">Active</span>' : '<span class="pill pill-danger">Inactive</span>'}</td>
+                      <td style="padding:.875rem 1rem;vertical-align:middle;text-align:right;">
+                        <div style="display:inline-flex;gap:.25rem;">
+                          <button class="btn btn-ghost" style="padding:.375rem .5rem;font-size:.75rem;" data-action="edit-user" data-username="${esc(u.username)}" title="Edit">${icon('edit','icon icon-sm')}</button>
+                          <button class="btn btn-ghost" style="padding:.375rem .5rem;font-size:.75rem;" data-action="reset-pwd" data-username="${esc(u.username)}" title="Reset password">${icon('lock','icon icon-sm')}</button>
+                          ${isMe ? '' : `<button class="btn btn-ghost" style="padding:.375rem .5rem;font-size:.75rem;color:var(--danger);" data-action="delete-user" data-username="${esc(u.username)}" title="Delete">${icon('trash','icon icon-sm')}</button>`}
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        `}
+
+        <style>
+          @media (max-width: 640px) { .hide-mobile { display: none; } }
+        </style>
+      </div>
+    `;
+  }
+
+  function renderUserForm() {
+    const u = state.editingUser || { username: '', fullName: '', email: '', role: 'Entry', active: true, _isNew: true };
+    const isNew = !!u._isNew;
+    return `
+      <form class="anim-in" style="max-width:32rem;margin:0 auto;" id="user-form">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;">
+          <div>
+            <div class="label-text" style="color:var(--terra);">${isNew ? 'Add User' : 'Edit User'}</div>
+            <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">${isNew ? 'New User' : esc(u.fullName || u.username)}</h2>
+          </div>
+          <button type="button" class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;" data-action="cancel-user-form">Cancel</button>
+        </div>
+
+        <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;">
+          <div style="margin-bottom:1rem;">
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Username <span style="color:var(--terra);">*</span></label>
+            <input class="input-field" name="username" value="${esc(u.username)}" ${isNew ? '' : 'readonly style="background:var(--cream);opacity:.7;"'} placeholder="e.g. dpastor" required>
+            <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">Letters, numbers, dot/underscore/dash. ${isNew ? 'Cannot be changed later.' : 'Cannot be changed.'}</div>
+          </div>
+
+          <div style="margin-bottom:1rem;">
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Full Name <span style="color:var(--terra);">*</span></label>
+            <input class="input-field" name="fullName" value="${esc(u.fullName)}" placeholder="e.g. Pastor Denise Johnson" required>
+          </div>
+
+          <div style="margin-bottom:1rem;">
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Email</label>
+            <input class="input-field" name="email" type="email" value="${esc(u.email || '')}" placeholder="optional@example.com">
+          </div>
+
+          <div style="margin-bottom:1rem;">
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Role <span style="color:var(--terra);">*</span></label>
+            <div style="display:flex;gap:.5rem;">
+              ${['Full','Entry'].map(r => `
+                <button type="button" data-action="set-user-role" data-value="${r}" style="padding:.625rem 1rem;font-size:.875rem;border-radius:3px;flex:1;cursor:pointer;border:1px solid var(--divider);background:${u.role===r?'var(--sage-dark)':'var(--cream-soft)'};color:${u.role===r?'var(--cream-soft)':'var(--ink)'};font-family:inherit;">${r}</button>
+              `).join('')}
+            </div>
+            <div style="font-size:.75rem;margin-top:.375rem;color:var(--ink-soft);line-height:1.5;">
+              <strong>Full</strong> can do everything, including User Maintenance.<br>
+              <strong>Entry</strong> can manage children and check-in but cannot manage users.
+            </div>
+          </div>
+
+          <div style="margin-bottom:${isNew ? '1rem' : '0'};">
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Status</label>
+            <button type="button" data-action="toggle-user-active" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:.75rem;border-radius:3px;text-align:left;background:var(--cream-soft);border:1px solid var(--divider);cursor:pointer;font-family:inherit;">
+              <div>
+                <div style="font-weight:600;font-size:.875rem;color:var(--ink);">${u.active ? 'Active' : 'Inactive'}</div>
+                <div style="font-size:.75rem;color:var(--ink-soft);">${u.active ? 'User can sign in' : 'User is blocked from signing in'}</div>
+              </div>
+              <div style="width:44px;height:24px;border-radius:999px;padding:2px;flex-shrink:0;background:${u.active?'var(--sage-dark)':'var(--divider)'};">
+                <div style="width:20px;height:20px;border-radius:50%;background:var(--cream-soft);transform:translateX(${u.active?'20px':'0'});transition:transform .2s;"></div>
+              </div>
+            </button>
+            <input type="hidden" name="active" value="${u.active ? 'true' : 'false'}">
+          </div>
+
+          ${isNew ? `
+            <div style="border-top:1px solid var(--divider);padding-top:1rem;margin-top:1rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Initial Password <span style="color:var(--terra);">*</span></label>
+              <input class="input-field" name="password" type="password" placeholder="Minimum 6 characters" required minlength="6">
+              <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">The user can change this themselves after their first sign-in.</div>
+            </div>
+          ` : ''}
+        </div>
+
+        <div style="display:flex;gap:.75rem;justify-content:flex-end;">
+          <button type="button" class="btn btn-ghost" style="padding:.625rem 1.25rem;" data-action="cancel-user-form">Cancel</button>
+          <button type="submit" class="btn btn-primary" style="padding:.625rem 1.5rem;font-weight:600;border-radius:3px;display:flex;align-items:center;gap:.5rem;">
+            ${icon('check','icon icon-sm')} ${isNew ? 'Create User' : 'Save Changes'}
+          </button>
+        </div>
+      </form>
     `;
   }
 
@@ -1252,24 +1627,49 @@
   // Handlers
   // ============================================================
   function attachHandlers() {
-    // Delegated click
     document.getElementById('app').addEventListener('click', onClick);
     document.getElementById('app').addEventListener('input', onInput);
     document.getElementById('app').addEventListener('change', onChange);
 
-    // Child form submission
-    const form = document.getElementById('child-form');
-    if (form) form.addEventListener('submit', onFormSubmit);
+    const childForm = document.getElementById('child-form');
+    if (childForm) childForm.addEventListener('submit', onFormSubmit);
 
-    // Login form submission
+    const setupForm = document.getElementById('setup-form');
+    if (setupForm) setupForm.addEventListener('submit', onSetupSubmit);
+
     const loginForm = document.getElementById('login-form');
     if (loginForm) loginForm.addEventListener('submit', onLoginSubmit);
+
+    const userForm = document.getElementById('user-form');
+    if (userForm) userForm.addEventListener('submit', onUserFormSubmit);
+  }
+
+  function onSetupSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    actions.setupDevice(fd.get('backendUrl'), fd.get('passcode'));
   }
 
   function onLoginSubmit(e) {
     e.preventDefault();
     const fd = new FormData(e.target);
-    actions.connect(fd.get('backendUrl'), fd.get('passcode'));
+    actions.signIn(fd.get('username'), fd.get('password'));
+  }
+
+  function onUserFormSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const isNew = state.editingUser && state.editingUser._isNew;
+    const form = {
+      username: String(fd.get('username') || '').trim(),
+      fullName: String(fd.get('fullName') || '').trim(),
+      email: String(fd.get('email') || '').trim(),
+      role: state.editingUser ? state.editingUser.role : 'Entry',
+      active: state.editingUser ? state.editingUser.active !== false : true,
+      _isNew: isNew
+    };
+    const password = isNew ? String(fd.get('password') || '') : null;
+    actions.saveUser(form, password);
   }
 
   function onClick(e) {
@@ -1282,14 +1682,36 @@
       }
       return;
     }
+    // Close maint dropdown on outside click
+    if (state.showMaintMenu && !target) {
+      if (!e.target.closest('[data-action="toggle-maint"]')) {
+        state.showMaintMenu = false;
+        render();
+      }
+      return;
+    }
     if (!target) return;
     const action = target.dataset.action;
     const id = target.dataset.id;
+    const username = target.dataset.username;
 
     switch (action) {
+      // ---- Navigation ----
       case 'goto': actions.goto(target.dataset.view); break;
       case 'goto-roster': actions.goto('roster'); break;
       case 'goto-checkin': actions.goto('checkin'); break;
+      case 'goto-users':
+        state.showMaintMenu = false;
+        actions.goto('users');
+        actions.loadUsers();
+        break;
+      case 'toggle-maint':
+        state.showMaintMenu = !state.showMaintMenu;
+        state.showSettings = false;
+        render();
+        break;
+
+      // ---- Children ----
       case 'new-child': actions.goto('form', {editing: emptyChild()}); break;
       case 'view-child': actions.goto('child', {selectedId: id}); break;
       case 'edit-child': {
@@ -1302,13 +1724,6 @@
       case 'check-in': actions.checkIn(id); break;
       case 'check-out': actions.checkOut(id); break;
       case 'cancel-form': actions.goto(state.selectedId ? 'child' : 'roster'); break;
-      case 'export-json': actions.exportJSON(); break;
-      case 'export-csv': actions.exportCSV(); break;
-      case 'toggle-settings': actions.toggleSettings(); break;
-      case 'disconnect': actions.disconnect(); break;
-      case 'refresh': actions.refresh(); break;
-      case 'show-login': state.showSettings = false; state.view = 'login'; render(); break;
-      case 'try-demo': state.view = 'dashboard'; render(); break;
       case 'set-preferred': {
         state.editing = state.editing || emptyChild();
         state.editing.preferredContact = target.dataset.value;
@@ -1331,7 +1746,62 @@
         render();
         break;
       }
+
+      // ---- Data import/export ----
+      case 'export-json': actions.exportJSON(); break;
+      case 'export-csv': actions.exportCSV(); break;
+
+      // ---- Account / device ----
+      case 'toggle-settings': actions.toggleSettings(); break;
+      case 'sign-out': actions.signOut(); break;
+      case 'forget-device': actions.forgetDevice(); break;
+      case 'change-my-password': state.showSettings = false; render(); actions.changeMyPassword(); break;
+      case 'refresh': actions.refresh(); break;
+
+      // ---- User Maintenance ----
+      case 'refresh-users': actions.loadUsers(); break;
+      case 'new-user':
+        state.editingUser = { username: '', fullName: '', email: '', role: 'Entry', active: true, _isNew: true };
+        actions.goto('user-form');
+        break;
+      case 'edit-user': {
+        const u = (state.users || []).find(x => x.username === username);
+        if (u) {
+          state.editingUser = Object.assign({}, u, { _isNew: false });
+          actions.goto('user-form');
+        }
+        break;
+      }
+      case 'delete-user': actions.deleteUser(username); break;
+      case 'reset-pwd': actions.resetPassword(username); break;
+      case 'cancel-user-form': state.editingUser = null; actions.goto('users'); break;
+      case 'set-user-role': {
+        if (state.editingUser) {
+          captureUserFormInputs();
+          state.editingUser.role = target.dataset.value;
+          render();
+        }
+        break;
+      }
+      case 'toggle-user-active': {
+        if (state.editingUser) {
+          captureUserFormInputs();
+          state.editingUser.active = !state.editingUser.active;
+          render();
+        }
+        break;
+      }
     }
+  }
+
+  function captureUserFormInputs() {
+    const form = document.getElementById('user-form');
+    if (!form) return;
+    const fd = new FormData(form);
+    if (!state.editingUser) return;
+    state.editingUser.username = fd.get('username') || state.editingUser.username;
+    state.editingUser.fullName = fd.get('fullName') || state.editingUser.fullName;
+    state.editingUser.email = fd.get('email') || state.editingUser.email;
   }
 
   function onInput(e) {

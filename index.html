@@ -126,8 +126,15 @@
   // ============================================================
   // VERSION — bump this when releasing a new build
   // ============================================================
-  const APP_VERSION = '1.0.3';
+  const APP_VERSION = '1.1.0';
   const APP_BUILD_DATE = '2026-04-27';
+
+  // ============================================================
+  // FEATURE FLAGS
+  // ============================================================
+  // Set to true to require username/password login.
+  // Set to false to use the device passcode only (no per-user accounts).
+  const LOGIN_ENABLED = false;
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -352,8 +359,8 @@
       return;
     }
 
-    // Device set up but no logged-in user — show login screen
-    if (!state.auth) {
+    // If login is required but no user is signed in, show login screen
+    if (LOGIN_ENABLED && !state.auth) {
       state.view = 'login';
       render();
       return;
@@ -370,7 +377,8 @@
   }
 
   async function refreshFromBackend() {
-    if (!state.config || !state.auth) return;
+    if (!state.config) return;
+    if (LOGIN_ENABLED && !state.auth) return;
     state.syncing = true;
     updateHeaderStatus();
     try {
@@ -444,14 +452,29 @@
         render();
         return;
       }
-      // Save config provisionally so api.post can use it for the login attempt
+      // Save config
       state.config = { backendUrl, passcode };
       state.bootError = null;
-      // Skip to login screen — passcode is verified there during sign-in
-      state.view = 'login';
       state.setupDraft = { backendUrl: '', passcode: '' };
       store.save(KEYS.CONFIG, state.config);
-      render();
+
+      if (LOGIN_ENABLED) {
+        // Login flow handles verification
+        state.view = 'login';
+        render();
+      } else {
+        // No login — try to load data immediately to verify the connection
+        state.view = 'dashboard';
+        state.syncing = true;
+        render();
+        try {
+          await refreshFromBackend();
+          await retryPending();
+          toast('Connected to your sheet.');
+        } catch (err) {
+          // refreshFromBackend already handles the error display
+        }
+      }
     },
 
     async signIn(username, password) {
@@ -739,7 +762,7 @@
       return renderLogin();
     }
 
-    const isFull = state.auth && state.auth.role === 'Full';
+    const isFull = LOGIN_ENABLED && state.auth && state.auth.role === 'Full';
     const userLabel = state.auth ? (state.auth.fullName || state.auth.username) : '';
     return `
       <header style="border-bottom: 1px solid var(--divider); background: var(--paper);">
@@ -763,19 +786,30 @@
                 <input type="file" accept="application/json" class="hidden" data-action="import-json">
               </label>
               <div style="position:relative;">
-                <button class="btn btn-ghost" style="padding:.5rem .625rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="toggle-settings" title="Account &amp; settings">
-                  <div style="width:24px;height:24px;border-radius:50%;background:var(--sage-dark);color:var(--cream-soft);display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-weight:600;font-size:.7rem;">${esc((userLabel || '?').slice(0,1).toUpperCase())}</div>
-                  <span style="max-width:8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(userLabel)}</span>
-                </button>
+                ${LOGIN_ENABLED && state.auth ? `
+                  <button class="btn btn-ghost" style="padding:.5rem .625rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="toggle-settings" title="Account &amp; settings">
+                    <div style="width:24px;height:24px;border-radius:50%;background:var(--sage-dark);color:var(--cream-soft);display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-weight:600;font-size:.7rem;">${esc((userLabel || '?').slice(0,1).toUpperCase())}</div>
+                    <span style="max-width:8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(userLabel)}</span>
+                  </button>
+                ` : `
+                  <button class="btn btn-ghost" style="padding:.5rem;font-size:.875rem;display:flex;align-items:center;" data-action="toggle-settings" title="Settings">
+                    ${icon('settings','icon icon-sm')}
+                  </button>
+                `}
                 ${state.showSettings ? `
                   <div style="position:absolute;right:0;top:100%;margin-top:.5rem;background:var(--paper);border:1px solid var(--divider);border-radius:4px;box-shadow:0 10px 25px rgba(0,0,0,.1);min-width:18rem;z-index:40;padding:1rem;">
-                    <div class="label-text" style="color:var(--ink-soft);margin-bottom:.5rem;">Account</div>
-                    <div style="font-size:.875rem;font-weight:600;color:var(--ink);">${esc(userLabel)}</div>
-                    <div style="font-size:.75rem;color:var(--ink-soft);margin-bottom:.75rem;">${esc(state.auth.role)} role · @${esc(state.auth.username)}</div>
-                    <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.5rem;" data-action="change-my-password">${icon('lock','icon icon-sm')} Change password</button>
-                    <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.75rem;color:var(--danger);" data-action="sign-out">${icon('logout','icon icon-sm')} Sign out</button>
-                    <div class="label-text" style="color:var(--ink-soft);margin-bottom:.5rem;border-top:1px solid var(--divider);padding-top:.75rem;">Device</div>
+                    ${LOGIN_ENABLED && state.auth ? `
+                      <div class="label-text" style="color:var(--ink-soft);margin-bottom:.5rem;">Account</div>
+                      <div style="font-size:.875rem;font-weight:600;color:var(--ink);">${esc(userLabel)}</div>
+                      <div style="font-size:.75rem;color:var(--ink-soft);margin-bottom:.75rem;">${esc(state.auth.role)} role · @${esc(state.auth.username)}</div>
+                      <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.5rem;" data-action="change-my-password">${icon('lock','icon icon-sm')} Change password</button>
+                      <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.75rem;color:var(--danger);" data-action="sign-out">${icon('logout','icon icon-sm')} Sign out</button>
+                      <div class="label-text" style="color:var(--ink-soft);margin-bottom:.5rem;border-top:1px solid var(--divider);padding-top:.75rem;">Device</div>
+                    ` : `
+                      <div class="label-text" style="color:var(--ink-soft);margin-bottom:.5rem;">Device</div>
+                    `}
                     <div style="font-size:.7rem;word-break:break-all;color:var(--ink-soft);margin-bottom:.5rem;opacity:.7;">${esc(state.config.backendUrl.slice(0, 60))}…</div>
+                    <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.5rem;" data-action="refresh">${icon('refresh','icon icon-sm')} Refresh from sheet</button>
                     <button class="btn" style="width:100%;padding:.5rem;font-size:.8rem;color:var(--ink-soft);border:1px solid var(--divider);background:transparent;" data-action="forget-device">Forget device settings</button>
                   </div>
                 ` : ''}

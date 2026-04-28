@@ -126,7 +126,7 @@
   // ============================================================
   // VERSION — bump this when releasing a new build
   // ============================================================
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
   const APP_BUILD_DATE = '2026-04-28';
 
   // ============================================================
@@ -333,12 +333,37 @@
   const icon = (name, cls='icon') => `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
 
   const emptyChild = () => ({
-    id:'', fullName:'', birthdate:'', gradeLevel:'', school:'', parentId:'', parentNames:'',
-    phoneNumbers:'', emails:'', preferredContact:'Phone', allergies:'', allergySeverity:'None',
-    medicalConditions:'', specialNeeds:'', emergencyContact:'', authorizedPickup:'',
+    id:'', fullName:'', birthdate:'', gradeLevel:'', school:'',
+    parentIds:[], parentNames:'', phoneNumbers:'', emails:'', preferredContact:'Phone',
+    allergies:'', allergySeverity:'None',
+    medicalConditions:'', specialNeeds:'', emergencyContact:'',
+    authorizedPickupIds:[], authorizedPickup:'',
     photoConsent:false, newsletterOptIn:false, visitorStatus:'Visitor', churchMembership:'',
     prayerRequests:'', classroom:'', createdAt:''
   });
+
+  // Look up a list of parent records by their IDs (preserves order, drops missing)
+  const lookupParents = (ids) => {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    return ids.map(id => state.parents.find(p => p.id === id)).filter(Boolean);
+  };
+
+  // Combine an array of values into a comma-separated string, dropping blanks
+  const joinNonEmpty = (arr, sep = ', ') =>
+    (arr || []).map(v => (v == null ? '' : String(v).trim())).filter(Boolean).join(sep);
+
+  // Backwards-compat: convert legacy single parentId to parentIds array
+  const normalizeChild = (c) => {
+    if (!c) return c;
+    if (!Array.isArray(c.parentIds)) {
+      c.parentIds = c.parentId ? [c.parentId] : [];
+      delete c.parentId;
+    }
+    if (!Array.isArray(c.authorizedPickupIds)) {
+      c.authorizedPickupIds = [];
+    }
+    return c;
+  };
 
   const emptyParent = () => ({
     id:'', fullName:'', phoneNumbers:'', emails:'', preferredContact:'Phone',
@@ -361,7 +386,7 @@
 
     // No device setup yet — show setup screen with demo data
     if (!state.config) {
-      state.children = store.load(KEYS.CHILDREN, null) || seed;
+      state.children = (store.load(KEYS.CHILDREN, null) || seed).map(normalizeChild);
       state.attendance = store.load(KEYS.ATTENDANCE, []);
       state.view = 'setup';
       render();
@@ -376,7 +401,7 @@
     }
 
     // Both — load from cache and try to refresh
-    state.children = store.load(KEYS.CHILDREN, []);
+    state.children = store.load(KEYS.CHILDREN, []).map(normalizeChild);
     state.attendance = store.load(KEYS.ATTENDANCE, []);
     state.parents = store.load(KEYS.PARENTS, []);
     state.view = 'dashboard';
@@ -393,7 +418,7 @@
     updateHeaderStatus();
     try {
       const data = await api.get();
-      state.children = data.children || [];
+      state.children = (data.children || []).map(normalizeChild);
       state.attendance = data.attendance || [];
       state.parents = data.parents || [];
       // Server may have updated the user record (e.g. role change)
@@ -742,7 +767,13 @@
 
     exportCSV() {
       const headers = ['Full Name','Birthdate','Age','Grade','School','Parents','Phones','Emails','Preferred Contact','Allergies','Allergy Severity','Medical','Special Needs','Emergency Contact','Authorized Pickup','Photo Consent','Newsletter','Status','Membership','Classroom','Prayer Requests'];
-      const rows = state.children.map(c => [c.fullName,c.birthdate,calcAge(c.birthdate),c.gradeLevel,c.school,c.parentNames,c.phoneNumbers,c.emails,c.preferredContact,c.allergies,c.allergySeverity,c.medicalConditions,c.specialNeeds,c.emergencyContact,c.authorizedPickup,c.photoConsent?'Yes':'No',c.newsletterOptIn?'Yes':'No',c.visitorStatus,c.churchMembership,c.classroom,c.prayerRequests]);
+      const rows = state.children.map(c => {
+        const pickupText = joinNonEmpty([
+          ...lookupParents(c.authorizedPickupIds).map(p => p.fullName),
+          c.authorizedPickup
+        ]);
+        return [c.fullName,c.birthdate,calcAge(c.birthdate),c.gradeLevel,c.school,c.parentNames,c.phoneNumbers,c.emails,c.preferredContact,c.allergies,c.allergySeverity,c.medicalConditions,c.specialNeeds,c.emergencyContact,pickupText,c.photoConsent?'Yes':'No',c.newsletterOptIn?'Yes':'No',c.visitorStatus,c.churchMembership,c.classroom,c.prayerRequests];
+      });
       const csvEsc = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
       const csv = [headers, ...rows].map(r => r.map(csvEsc).join(',')).join('\n');
       download(`mt-calvary-roster-${todayISO()}.csv`, csv, 'text/csv');
@@ -759,7 +790,7 @@
             ? `Import ${data.children.length} children and overwrite the Google Sheet? This cannot be undone.`
             : `Import ${data.children.length} children? This will replace current data.`;
           if (!confirm(msg)) return;
-          state.children = data.children;
+          state.children = data.children.map(normalizeChild);
           state.attendance = data.attendance || [];
           saveCache();
           if (state.config) {
@@ -1449,7 +1480,10 @@
             ['Medical Conditions', c.medicalConditions],
             ['Special Needs', c.specialNeeds],
             ['Emergency Contact', c.emergencyContact],
-            ['Authorized Pick-Up', c.authorizedPickup]
+            ['Authorized Pick-Up', joinNonEmpty([
+              ...lookupParents(c.authorizedPickupIds).map(p => p.fullName),
+              c.authorizedPickup
+            ])]
           ])}
           ${detailSection('Communication &amp; Permissions', 'mail', [
             ['Photo/Media Consent', c.photoConsent ? '✓ Yes' : '✗ No'],
@@ -1548,24 +1582,32 @@
         ${formSection('Parent / Guardian', `
           ${state.parents && state.parents.length > 0 ? `
             <div>
-              <label class="label-text" style="display:block;margin-bottom:.375rem;">Use existing parent/guardian</label>
-              <select class="input-field" name="parentPicker" data-action="pick-parent">
-                <option value="">— Select to prefill, or type a new one below —</option>
-                ${state.parents.slice().sort((a,b) => (a.fullName||'').localeCompare(b.fullName||'')).map(p => {
-                  const matchedById = c.parentId && c.parentId === p.id;
-                  const matchedByName = !c.parentId && c.parentNames && p.fullName && c.parentNames.trim().toLowerCase() === p.fullName.trim().toLowerCase();
-                  const selected = matchedById || matchedByName;
-                  return `<option value="${esc(p.id)}"${selected ? ' selected' : ''}>${esc(p.fullName)}${p.phoneNumbers ? ' · ' + esc(p.phoneNumbers) : ''}</option>`;
-                }).join('')}
+              <label class="label-text" style="display:block;margin-bottom:.5rem;">Linked parents/guardians</label>
+              ${(c.parentIds || []).length > 0 ? `
+                <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.625rem;">
+                  ${lookupParents(c.parentIds).map(p => `
+                    <span style="display:inline-flex;align-items:center;gap:.375rem;padding:.375rem .5rem .375rem .75rem;border-radius:999px;background:var(--sage-dark);color:var(--cream-soft);font-size:.825rem;">
+                      ${esc(p.fullName)}
+                      <button type="button" data-action="remove-parent" data-parent-id="${esc(p.id)}" style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:rgba(255,255,255,.2);color:var(--cream-soft);border:none;cursor:pointer;font-size:.7rem;line-height:1;font-family:inherit;" title="Remove ${esc(p.fullName)}">×</button>
+                    </span>
+                  `).join('')}
+                </div>
+              ` : ''}
+              <select class="input-field" name="parentPicker" data-action="add-parent">
+                <option value="">+ Add a registered parent/guardian…</option>
+                ${state.parents
+                  .filter(p => !(c.parentIds || []).includes(p.id))
+                  .slice().sort((a,b) => (a.fullName||'').localeCompare(b.fullName||''))
+                  .map(p => `<option value="${esc(p.id)}">${esc(p.fullName)}${p.phoneNumbers ? ' · ' + esc(p.phoneNumbers) : ''}</option>`).join('')}
               </select>
-              <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">Selecting an existing parent will fill in their phone, email, and preferred contact below.</div>
+              <div style="font-size:.75rem;margin-top:.375rem;color:var(--ink-soft);">Adding a registered parent fills in the contact info below. Add as many as apply.</div>
             </div>
           ` : `
             <div style="font-size:.75rem;color:var(--ink-soft);padding:.5rem .75rem;background:var(--cream-soft);border-radius:3px;">
-              No parents/guardians registered yet. Enter their details below — you can also pre-register them from the dashboard's "Parent/Guardian Registration" card.
+              No parents/guardians registered yet. Enter their details below — or pre-register them from the dashboard's "Parent/Guardian Registration" card to enable multi-select.
             </div>
           `}
-          ${field('parentNames','Names','text',c.parentNames,{required:true})}
+          ${field('parentNames','Names','text',c.parentNames,{required:true,hint:'Auto-filled from selected parents above. You can edit it.'})}
           <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="two-col">
             ${field('phoneNumbers','Phone Numbers','text',c.phoneNumbers,{required:true})}
             ${field('emails','Emails','email',c.emails)}
@@ -1593,7 +1635,31 @@
           ${field('medicalConditions','Medical Conditions','textarea',c.medicalConditions)}
           ${field('specialNeeds','Special Needs / Accommodations','textarea',c.specialNeeds)}
           ${field('emergencyContact','Emergency Contact','text',c.emergencyContact,{required:true,hint:'Name & phone of someone other than the parent'})}
-          ${field('authorizedPickup','Authorized Pick-Up List','textarea',c.authorizedPickup,{hint:'Names of anyone allowed to collect the child'})}
+
+          <div>
+            <label class="label-text" style="display:block;margin-bottom:.5rem;">Authorized Pick-Up</label>
+            ${(c.authorizedPickupIds || []).length > 0 ? `
+              <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.625rem;">
+                ${lookupParents(c.authorizedPickupIds).map(p => `
+                  <span style="display:inline-flex;align-items:center;gap:.375rem;padding:.375rem .5rem .375rem .75rem;border-radius:999px;background:var(--terra);color:var(--cream-soft);font-size:.825rem;">
+                    ${esc(p.fullName)}
+                    <button type="button" data-action="remove-pickup" data-parent-id="${esc(p.id)}" style="display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:rgba(255,255,255,.2);color:var(--cream-soft);border:none;cursor:pointer;font-size:.7rem;line-height:1;font-family:inherit;" title="Remove ${esc(p.fullName)}">×</button>
+                  </span>
+                `).join('')}
+              </div>
+            ` : ''}
+            ${state.parents && state.parents.length > 0 ? `
+              <select class="input-field" name="pickupPicker" data-action="add-pickup" style="margin-bottom:.625rem;">
+                <option value="">+ Add a registered parent/guardian to pickup list…</option>
+                ${state.parents
+                  .filter(p => !(c.authorizedPickupIds || []).includes(p.id))
+                  .slice().sort((a,b) => (a.fullName||'').localeCompare(b.fullName||''))
+                  .map(p => `<option value="${esc(p.id)}">${esc(p.fullName)}</option>`).join('')}
+              </select>
+            ` : ''}
+            <textarea class="input-field" name="authorizedPickup" rows="2" placeholder="Other people allowed to pick up — e.g. Grandma Ruth (gold Camry), Aunt Bri">${esc(c.authorizedPickup || '')}</textarea>
+            <div style="font-size:.75rem;margin-top:.375rem;color:var(--ink-soft);">Pick parents from the list, then add anyone else by name in the text box below.</div>
+          </div>
         `, 'danger')}
 
         ${formSection('Communication &amp; Permissions', `
@@ -1771,7 +1837,13 @@
                         <div style="min-width:0;">
                           <div style="font-weight:600;font-size:.95rem;color:var(--ink);">${esc(c.fullName)}</div>
                           <div style="font-size:.75rem;color:var(--ink-soft);">${esc(c.parentNames || '—')} · in at ${fmtTime(rec.checkInAt)}</div>
-                          ${c.authorizedPickup ? `<div style="font-size:.7rem;color:var(--ink-soft);margin-top:.125rem;font-style:italic;">Authorized: ${esc(c.authorizedPickup)}</div>` : ''}
+                          ${(() => {
+                            const pickup = joinNonEmpty([
+                              ...lookupParents(c.authorizedPickupIds).map(p => p.fullName),
+                              c.authorizedPickup
+                            ]);
+                            return pickup ? `<div style="font-size:.7rem;color:var(--ink-soft);margin-top:.125rem;font-style:italic;">Authorized: ${esc(pickup)}</div>` : '';
+                          })()}
                         </div>
                       </div>
                       <span style="display:flex;align-items:center;gap:.375rem;color:var(--terra);font-weight:600;font-size:.8rem;flex-shrink:0;">${icon('logout','icon icon-sm')} Check Out</span>
@@ -2042,6 +2114,23 @@
         render();
         break;
       }
+      case 'remove-parent': {
+        if (!state.editing) break;
+        const pid = target.dataset.parentId;
+        captureFormInputs();
+        state.editing.parentIds = (state.editing.parentIds || []).filter(x => x !== pid);
+        recomputeChildContactFromParents();
+        render();
+        break;
+      }
+      case 'remove-pickup': {
+        if (!state.editing) break;
+        const pid = target.dataset.parentId;
+        captureFormInputs();
+        state.editing.authorizedPickupIds = (state.editing.authorizedPickupIds || []).filter(x => x !== pid);
+        render();
+        break;
+      }
 
       // ---- Data import/export ----
       case 'export-json': actions.exportJSON(); break;
@@ -2124,27 +2213,48 @@
     if (target.dataset.action === 'import-json') {
       const file = target.files && target.files[0];
       if (file) actions.importJSON(file);
-    } else if (target.dataset.action === 'pick-parent') {
-      // User selected a parent from the dropdown — prefill the editing child
+    } else if (target.dataset.action === 'add-parent') {
+      // User selected a parent from the dropdown — add to parentIds
       const parentId = target.value;
+      if (!parentId) return;
       state.editing = state.editing || emptyChild();
-      // Capture any in-progress edits before re-render
       captureFormInputs();
-      if (!parentId) {
-        // "— Select to prefill —" chosen — clear the link but keep typed values
-        state.editing.parentId = '';
-      } else {
-        const p = state.parents.find(x => x.id === parentId);
-        if (p) {
-          state.editing.parentId = p.id;
-          state.editing.parentNames = p.fullName || '';
-          state.editing.phoneNumbers = p.phoneNumbers || '';
-          state.editing.emails = p.emails || '';
-          state.editing.preferredContact = p.preferredContact || 'Phone';
-        }
+      if (!Array.isArray(state.editing.parentIds)) state.editing.parentIds = [];
+      if (!state.editing.parentIds.includes(parentId)) {
+        state.editing.parentIds.push(parentId);
+        recomputeChildContactFromParents();
+      }
+      render();
+    } else if (target.dataset.action === 'add-pickup') {
+      const parentId = target.value;
+      if (!parentId) return;
+      state.editing = state.editing || emptyChild();
+      captureFormInputs();
+      if (!Array.isArray(state.editing.authorizedPickupIds)) state.editing.authorizedPickupIds = [];
+      if (!state.editing.authorizedPickupIds.includes(parentId)) {
+        state.editing.authorizedPickupIds.push(parentId);
       }
       render();
     }
+  }
+
+  // When parents are added or removed, recompute the auto-filled
+  // names/phones/emails/preferred-contact fields on the child record.
+  // Only overwrites fields the user can clearly see derived from the chips.
+  function recomputeChildContactFromParents() {
+    if (!state.editing) return;
+    const linked = lookupParents(state.editing.parentIds);
+    if (linked.length === 0) {
+      // Don't blow away typed-in values — only clear if nothing is linked AND
+      // the existing values match the previous linked-parent computation
+      return;
+    }
+    state.editing.parentNames = joinNonEmpty(linked.map(p => p.fullName));
+    state.editing.phoneNumbers = joinNonEmpty(linked.map(p => p.phoneNumbers));
+    state.editing.emails = joinNonEmpty(linked.map(p => p.emails));
+    // For preferred contact, take the first linked parent's preference
+    const firstWithPref = linked.find(p => p.preferredContact);
+    if (firstWithPref) state.editing.preferredContact = firstWithPref.preferredContact;
   }
 
   function captureFormInputs() {
@@ -2154,7 +2264,7 @@
     const base = state.editing || emptyChild();
     for (const [k, v] of fd.entries()) {
       if (k === 'photoConsent' || k === 'newsletterOptIn') continue; // handled separately
-      if (k === 'parentPicker') continue; // dropdown is a UI-only helper, not a child field
+      if (k === 'parentPicker' || k === 'pickupPicker') continue; // UI helpers, not real fields
       base[k] = v;
     }
     state.editing = base;
@@ -2166,20 +2276,21 @@
     const fd = new FormData(form);
     const data = Object.assign({}, state.editing || emptyChild());
     for (const [k, v] of fd.entries()) {
-      if (k === 'parentPicker') continue; // UI-only field, never persist
+      if (k === 'parentPicker' || k === 'pickupPicker') continue; // UI helpers
       if (k === 'photoConsent' || k === 'newsletterOptIn') {
         data[k] = v === 'true';
       } else {
         data[k] = typeof v === 'string' ? v.trim() : v;
       }
     }
-    // Preserve button-driven and dropdown-driven fields from state.editing
+    // Preserve button-driven and array fields from state.editing
     if (state.editing) {
       data.preferredContact = state.editing.preferredContact || data.preferredContact;
       data.visitorStatus = state.editing.visitorStatus || data.visitorStatus;
       data.photoConsent = state.editing.photoConsent != null ? state.editing.photoConsent : (data.photoConsent === 'true');
       data.newsletterOptIn = state.editing.newsletterOptIn != null ? state.editing.newsletterOptIn : (data.newsletterOptIn === 'true');
-      data.parentId = state.editing.parentId || ''; // preserved from dropdown selection
+      data.parentIds = Array.isArray(state.editing.parentIds) ? state.editing.parentIds.slice() : [];
+      data.authorizedPickupIds = Array.isArray(state.editing.authorizedPickupIds) ? state.editing.authorizedPickupIds.slice() : [];
       if (state.editing.id) data.id = state.editing.id;
       if (state.editing.createdAt) data.createdAt = state.editing.createdAt;
     }

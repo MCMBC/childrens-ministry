@@ -126,8 +126,8 @@
   // ============================================================
   // VERSION — bump this when releasing a new build
   // ============================================================
-  const APP_VERSION = '1.1.0';
-  const APP_BUILD_DATE = '2026-04-27';
+  const APP_VERSION = '1.2.1';
+  const APP_BUILD_DATE = '2026-04-28';
 
   // ============================================================
   // FEATURE FLAGS
@@ -139,21 +139,24 @@
   const KEYS = {
     CHILDREN: 'cc:children',
     ATTENDANCE: 'cc:attendance',
-    CONFIG: 'cc:config',          // { backendUrl, passcode } — saved once per device
-    AUTH: 'cc:auth',              // { username, fullName, role, sessionToken } — per session
-    PENDING: 'cc:pending',        // queue of actions to retry when back online
-    USERS_CACHE: 'cc:users'       // last-fetched users list (Full role only)
+    PARENTS: 'cc:parents',
+    CONFIG: 'cc:config',
+    AUTH: 'cc:auth',
+    PENDING: 'cc:pending',
+    USERS_CACHE: 'cc:users'
   };
 
   // State
   const state = {
     children: [],
     attendance: [],
-    users: [],                    // populated when User Maintenance is opened
+    parents: [],
+    users: [],
     view: 'dashboard',
     selectedId: null,
     editing: null,                // child being edited
-    editingUser: null,            // user being edited
+    editingUser: null,
+    editingParent: null,          // parent/guardian being edited
     search: '',
     checkinSearch: '',
     // Backend connection
@@ -281,6 +284,7 @@
   function saveCache() {
     store.save(KEYS.CHILDREN, state.children);
     store.save(KEYS.ATTENDANCE, state.attendance);
+    store.save(KEYS.PARENTS, state.parents);
   }
 
   function updateHeaderStatus() {
@@ -336,6 +340,11 @@
     prayerRequests:'', classroom:'', createdAt:''
   });
 
+  const emptyParent = () => ({
+    id:'', fullName:'', phoneNumbers:'', emails:'', preferredContact:'Phone',
+    address:'', churchMembership:'', notes:'', createdAt:''
+  });
+
   // Sample data shown only in demo mode (no backend configured)
   const seed = [
     Object.assign(emptyChild(), {id:uid(), fullName:'Amara Johnson', birthdate:'2017-03-14', gradeLevel:'2nd Grade', school:'Oakwood Elementary', parentNames:'Denise & Marcus Johnson', phoneNumbers:'(555) 123-4567', emails:'dmjohnson@example.com', preferredContact:'Text', allergies:'Peanuts', allergySeverity:'Severe', emergencyContact:'Grandma Ruth — (555) 222-3344', authorizedPickup:'Denise Johnson, Marcus Johnson, Ruth Johnson', photoConsent:true, newsletterOptIn:true, visitorStatus:'Member', churchMembership:'Mt. Calvary', prayerRequests:'Strength at school', classroom:'Lambs', createdAt:nowISO()}),
@@ -369,6 +378,7 @@
     // Both — load from cache and try to refresh
     state.children = store.load(KEYS.CHILDREN, []);
     state.attendance = store.load(KEYS.ATTENDANCE, []);
+    state.parents = store.load(KEYS.PARENTS, []);
     state.view = 'dashboard';
     render();
 
@@ -385,6 +395,7 @@
       const data = await api.get();
       state.children = data.children || [];
       state.attendance = data.attendance || [];
+      state.parents = data.parents || [];
       // Server may have updated the user record (e.g. role change)
       if (data.user && state.auth && data.user.username === state.auth.username) {
         state.auth = Object.assign({}, state.auth, data.user);
@@ -663,6 +674,42 @@
       actions.goto('roster');
     },
 
+    async saveParent(form) {
+      if (!form.fullName || !form.fullName.trim()) {
+        toast('Parent/guardian name is required', 'error');
+        return false;
+      }
+      if (!form.phoneNumbers.trim() && !form.emails.trim()) {
+        toast('Provide a phone number or email', 'error');
+        return false;
+      }
+      const isNew = !form.id || !state.parents.find(p => p.id === form.id);
+      if (isNew) {
+        form.id = uid();
+        form.createdAt = nowISO();
+      }
+      form.updatedAt = nowISO();
+      const msg = isNew ? `Added ${form.fullName}` : `Updated ${form.fullName}`;
+      await syncAction('upsertParent', { parent: form }, () => {
+        if (isNew) state.parents.push(form);
+        else state.parents = state.parents.map(p => p.id === form.id ? form : p);
+      });
+      toast(msg);
+      state.editingParent = null;
+      actions.goto('dashboard');
+      return true;
+    },
+
+    async deleteParent(id) {
+      const p = state.parents.find(x => x.id === id);
+      if (!p) return;
+      if (!confirm(`Remove ${p.fullName} from parents/guardians? This cannot be undone.`)) return;
+      await syncAction('deleteParent', { id }, () => {
+        state.parents = state.parents.filter(x => x.id !== id);
+      });
+      toast(`Removed ${p.fullName}`, 'warn');
+    },
+
     async checkIn(childId) {
       const c = state.children.find(x => x.id === childId);
       if (!c) return;
@@ -821,7 +868,8 @@
           <div style="display:flex;gap:.25rem;overflow-x:auto;align-items:center;">
             ${tab('dashboard','Overview','home')}
             ${tab('roster','Roster','users')}
-            ${tab('checkin','Check-In','clipboard')}
+            ${tab('checkin','Check-In','login')}
+            ${tab('checkout','Check-Out','logout')}
             ${isFull ? `
               <div style="position:relative;">
                 <button class="btn ${state.view === 'users' || state.view === 'user-form' ? 'tab-active' : 'tab-inactive'}" style="background:transparent;padding:.75rem 1rem;font-size:.875rem;font-weight:500;display:flex;align-items:center;gap:.5rem;white-space:nowrap;" data-action="toggle-maint">
@@ -868,8 +916,10 @@
       case 'dashboard': return renderDashboard();
       case 'roster': return renderRoster();
       case 'checkin': return renderCheckin();
+      case 'checkout': return renderCheckout();
       case 'child': return renderChildDetail();
       case 'form': return renderForm();
+      case 'parent-form': return renderParentForm();
       case 'users': return renderUsers();
       case 'user-form': return renderUserForm();
       default: return renderDashboard();
@@ -1167,9 +1217,14 @@
         </div>
 
         <div class="grid-actions">
-          ${actionCard('user-plus','New Registration','Add a child &amp; guardians','new-child')}
-          ${actionCard('clipboard',"Today's Check-In",'Check children in &amp; out','goto-checkin')}
+          ${actionCard('login',"Today's Check-In",'Children arriving','goto-checkin')}
+          ${actionCard('logout',"Today's Check-Out",'Pick-up &amp; sign-out','goto-checkout')}
           ${actionCard('book','Full Roster','Browse &amp; edit records','goto-roster')}
+        </div>
+
+        <div class="grid-actions">
+          ${actionCard('user-plus','New Registration','Add a child &amp; guardians','new-child')}
+          ${actionCard('users','Parent/Guardian Registration','Add a parent or guardian','new-parent')}
         </div>
 
         <div style="display:grid;grid-template-columns:1fr;gap:1.5rem;" id="dash-bottom">
@@ -1593,7 +1648,7 @@
     `;
   }
 
-  // ---------- Check-in ----------
+  // ---------- Check-In ----------
   function renderCheckin() {
     const today = todayISO();
     const todayRecords = state.attendance.filter(a => a.date === today);
@@ -1608,37 +1663,12 @@
 
     return `
       <div class="anim-in">
-        <div style="margin-bottom:1.5rem;">
-          <div class="label-text" style="color:var(--terra);">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
-          <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">Check-In Station</h2>
-        </div>
-
-        <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;border-left:3px solid var(--terra);">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
-            <h3 class="font-display" style="font-size:1.25rem;margin:0;color:var(--ink);">Present Now <span style="font-size:.875rem;font-family:'Lora',serif;font-weight:400;color:var(--ink-soft);">· ${activeToday.length}</span></h3>
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+          <div>
+            <div class="label-text" style="color:var(--terra);">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+            <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">Check-In Station</h2>
+            <p style="font-size:.875rem;margin:.25rem 0 0;color:var(--ink-soft);">${activeToday.length} child${activeToday.length === 1 ? '' : 'ren'} present now · go to Check-Out for pick-ups</p>
           </div>
-          ${activeToday.length === 0
-            ? `<p style="font-size:.875rem;font-style:italic;color:var(--ink-soft);">No children currently checked in.</p>`
-            : `<div class="grid-checkin" style="max-height:none;">
-                ${activeToday.map(rec => {
-                  const c = state.children.find(x => x.id === rec.childId);
-                  if (!c) return '';
-                  const hasAlert = c.allergySeverity === 'Severe' || (c.medicalConditions && c.medicalConditions.trim());
-                  return `
-                    <div style="display:flex;align-items:center;justify-content:space-between;padding:.75rem;border-radius:3px;background:var(--cream-soft);">
-                      <div style="display:flex;align-items:center;gap:.5rem;min-width:0;">
-                        ${hasAlert ? icon('alert','icon icon-sm') : ''}
-                        <div style="min-width:0;">
-                          <div style="font-weight:600;font-size:.875rem;color:var(--ink);">${esc(c.fullName)}</div>
-                          <div style="font-size:.75rem;color:var(--ink-soft);">In at ${fmtTime(rec.checkInAt)}</div>
-                        </div>
-                      </div>
-                      <button class="btn btn-ghost" style="padding:.375rem .625rem;font-size:.75rem;display:flex;align-items:center;gap:.25rem;flex-shrink:0;" data-action="check-out" data-id="${rec.id}">${icon('logout','icon icon-sm')} Out</button>
-                    </div>
-                  `;
-                }).join('')}
-              </div>`
-          }
         </div>
 
         <div class="card" style="padding:1.5rem;">
@@ -1672,6 +1702,149 @@
     `;
   }
 
+  // ---------- Check-Out ----------
+  function renderCheckout() {
+    const today = todayISO();
+    const todayRecords = state.attendance.filter(a => a.date === today);
+    const activeToday = todayRecords.filter(a => !a.checkOutAt);
+    const completedToday = todayRecords.filter(a => a.checkOutAt);
+    const q = state.checkinSearch.toLowerCase().trim();
+    const filteredActive = activeToday.filter(rec => {
+      if (!q) return true;
+      const c = state.children.find(x => x.id === rec.childId);
+      if (!c) return false;
+      return c.fullName.toLowerCase().includes(q) || (c.parentNames||'').toLowerCase().includes(q);
+    });
+
+    return `
+      <div class="anim-in">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+          <div>
+            <div class="label-text" style="color:var(--terra);">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+            <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">Check-Out Station</h2>
+            <p style="font-size:.875rem;margin:.25rem 0 0;color:var(--ink-soft);">${activeToday.length} present now · ${completedToday.length} already picked up today</p>
+          </div>
+        </div>
+
+        <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;border-left:3px solid var(--terra);">
+          <h3 class="font-display" style="font-size:1.25rem;margin:0 0 1rem;color:var(--ink);">Children Currently Present</h3>
+          <div style="position:relative;margin-bottom:1rem;">
+            <span style="position:absolute;left:.75rem;top:50%;transform:translateY(-50%);color:var(--ink-soft);">${icon('search','icon icon-sm')}</span>
+            <input class="input-field" style="padding-left:2.5rem;" placeholder="Search present children…" value="${esc(state.checkinSearch)}" data-action="search-checkin">
+          </div>
+          ${activeToday.length === 0
+            ? `<p style="font-size:.875rem;font-style:italic;color:var(--ink-soft);">No children currently checked in. Use Check-In to begin the day.</p>`
+            : filteredActive.length === 0
+            ? `<p style="font-size:.875rem;font-style:italic;color:var(--ink-soft);">No matches.</p>`
+            : `<div class="grid-checkin" style="max-height:none;">
+                ${filteredActive.map(rec => {
+                  const c = state.children.find(x => x.id === rec.childId);
+                  if (!c) return '';
+                  const hasAlert = c.allergySeverity === 'Severe' || (c.medicalConditions && c.medicalConditions.trim());
+                  return `
+                    <button class="btn" style="display:flex;align-items:center;justify-content:space-between;padding:.875rem;border-radius:3px;text-align:left;background:var(--paper);border:1px solid var(--divider);width:100%;" data-action="check-out" data-id="${rec.id}">
+                      <div style="display:flex;align-items:center;gap:.625rem;min-width:0;">
+                        ${hasAlert ? icon('alert','icon icon-sm') : ''}
+                        <div style="min-width:0;">
+                          <div style="font-weight:600;font-size:.95rem;color:var(--ink);">${esc(c.fullName)}</div>
+                          <div style="font-size:.75rem;color:var(--ink-soft);">${esc(c.parentNames || '—')} · in at ${fmtTime(rec.checkInAt)}</div>
+                          ${c.authorizedPickup ? `<div style="font-size:.7rem;color:var(--ink-soft);margin-top:.125rem;font-style:italic;">Authorized: ${esc(c.authorizedPickup)}</div>` : ''}
+                        </div>
+                      </div>
+                      <span style="display:flex;align-items:center;gap:.375rem;color:var(--terra);font-weight:600;font-size:.8rem;flex-shrink:0;">${icon('logout','icon icon-sm')} Check Out</span>
+                    </button>
+                  `;
+                }).join('')}
+              </div>`
+          }
+        </div>
+
+        ${completedToday.length > 0 ? `
+          <div class="card" style="padding:1.5rem;">
+            <h3 class="font-display" style="font-size:1.125rem;margin:0 0 .75rem;color:var(--ink-soft);">Already Picked Up Today</h3>
+            <div style="display:grid;grid-template-columns:1fr;gap:.375rem;font-size:.85rem;">
+              ${completedToday.slice(0, 20).map(rec => {
+                const c = state.children.find(x => x.id === rec.childId);
+                return `<div style="padding:.5rem .75rem;background:var(--cream-soft);border-radius:3px;display:flex;justify-content:space-between;align-items:center;">
+                  <span style="color:var(--ink);">${esc(c ? c.fullName : '—')}</span>
+                  <span style="font-size:.75rem;color:var(--ink-soft);">${fmtTime(rec.checkInAt)} → ${fmtTime(rec.checkOutAt)}</span>
+                </div>`;
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  // ---------- Parent / Guardian Form ----------
+  function renderParentForm() {
+    const p = state.editingParent || emptyParent();
+    const isNew = !p.id;
+    return `
+      <form class="anim-in" style="max-width:36rem;margin:0 auto;" id="parent-form">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;">
+          <div>
+            <div class="label-text" style="color:var(--terra);">${isNew ? 'New Parent / Guardian' : 'Editing'}</div>
+            <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">${isNew ? 'Add Parent / Guardian' : esc(p.fullName)}</h2>
+          </div>
+          <button type="button" class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;" data-action="cancel-parent-form">Cancel</button>
+        </div>
+
+        <div class="card" style="padding:1.5rem;margin-bottom:1.25rem;">
+          <div style="margin-bottom:1rem;">
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Full Name <span style="color:var(--terra);">*</span></label>
+            <input class="input-field" name="fullName" value="${esc(p.fullName)}" placeholder="e.g. Denise & Marcus Johnson" required>
+            <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">For couples or single parents — list everyone who's a guardian.</div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="two-col">
+            <div>
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Phone Numbers</label>
+              <input class="input-field" name="phoneNumbers" value="${esc(p.phoneNumbers)}" placeholder="(555) 123-4567">
+            </div>
+            <div>
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Email</label>
+              <input class="input-field" name="emails" type="email" value="${esc(p.emails)}" placeholder="optional">
+            </div>
+          </div>
+
+          <div style="margin:1rem 0;">
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Preferred Contact</label>
+            <div style="display:flex;gap:.5rem;">
+              ${['Phone','Text','Email'].map(opt => `
+                <button type="button" data-action="set-parent-preferred" data-value="${opt}" style="padding:.625rem 1rem;font-size:.875rem;border-radius:3px;flex:1;cursor:pointer;border:1px solid var(--divider);background:${p.preferredContact===opt?'var(--sage-dark)':'var(--cream-soft)'};color:${p.preferredContact===opt?'var(--cream-soft)':'var(--ink)'};font-family:inherit;">${opt}</button>
+              `).join('')}
+            </div>
+          </div>
+
+          <div style="margin-bottom:1rem;">
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Address</label>
+            <textarea class="input-field" name="address" rows="2" placeholder="Optional">${esc(p.address)}</textarea>
+          </div>
+
+          <div style="margin-bottom:1rem;">
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Church Membership</label>
+            <input class="input-field" name="churchMembership" value="${esc(p.churchMembership)}" placeholder="Home church, if any">
+          </div>
+
+          <div>
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Notes</label>
+            <textarea class="input-field" name="notes" rows="2" placeholder="Anything else to remember about this family">${esc(p.notes)}</textarea>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:.75rem;justify-content:flex-end;align-items:center;flex-wrap:wrap;">
+          ${!isNew ? `<button type="button" class="btn-danger" style="font-size:.85rem;display:flex;align-items:center;gap:.25rem;margin-right:auto;" data-action="delete-parent" data-id="${esc(p.id)}">${icon('trash','icon icon-sm')} Remove</button>` : ''}
+          <button type="button" class="btn btn-ghost" style="padding:.625rem 1.25rem;" data-action="cancel-parent-form">Cancel</button>
+          <button type="submit" class="btn btn-primary" style="padding:.625rem 1.5rem;font-weight:600;border-radius:3px;display:flex;align-items:center;gap:.5rem;">
+            ${icon('check','icon icon-sm')} ${isNew ? 'Save Parent/Guardian' : 'Save Changes'}
+          </button>
+        </div>
+      </form>
+    `;
+  }
+
   // ============================================================
   // Handlers
   // ============================================================
@@ -1691,6 +1864,9 @@
 
     const userForm = document.getElementById('user-form');
     if (userForm) userForm.addEventListener('submit', onUserFormSubmit);
+
+    const parentForm = document.getElementById('parent-form');
+    if (parentForm) parentForm.addEventListener('submit', onParentFormSubmit);
   }
 
   function onSetupSubmit(e) {
@@ -1721,6 +1897,36 @@
     actions.saveUser(form, password);
   }
 
+  function onParentFormSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const base = state.editingParent || emptyParent();
+    const form = {
+      id: base.id || '',
+      fullName: String(fd.get('fullName') || '').trim(),
+      phoneNumbers: String(fd.get('phoneNumbers') || '').trim(),
+      emails: String(fd.get('emails') || '').trim(),
+      preferredContact: base.preferredContact || 'Phone',
+      address: String(fd.get('address') || '').trim(),
+      churchMembership: String(fd.get('churchMembership') || '').trim(),
+      notes: String(fd.get('notes') || '').trim(),
+      createdAt: base.createdAt || ''
+    };
+    actions.saveParent(form);
+  }
+
+  function captureParentFormInputs() {
+    const form = document.getElementById('parent-form');
+    if (!form || !state.editingParent) return;
+    const fd = new FormData(form);
+    state.editingParent.fullName = fd.get('fullName') || state.editingParent.fullName;
+    state.editingParent.phoneNumbers = fd.get('phoneNumbers') || state.editingParent.phoneNumbers;
+    state.editingParent.emails = fd.get('emails') || state.editingParent.emails;
+    state.editingParent.address = fd.get('address') || state.editingParent.address;
+    state.editingParent.churchMembership = fd.get('churchMembership') || state.editingParent.churchMembership;
+    state.editingParent.notes = fd.get('notes') || state.editingParent.notes;
+  }
+
   function onClick(e) {
     const target = e.target.closest('[data-action]');
     // Close settings dropdown on outside click
@@ -1748,7 +1954,8 @@
       // ---- Navigation ----
       case 'goto': actions.goto(target.dataset.view); break;
       case 'goto-roster': actions.goto('roster'); break;
-      case 'goto-checkin': actions.goto('checkin'); break;
+      case 'goto-checkin': state.checkinSearch = ''; actions.goto('checkin'); break;
+      case 'goto-checkout': state.checkinSearch = ''; actions.goto('checkout'); break;
       case 'goto-users':
         state.showMaintMenu = false;
         actions.goto('users');
@@ -1759,6 +1966,23 @@
         state.showSettings = false;
         render();
         break;
+
+      // ---- Parents / Guardians ----
+      case 'new-parent':
+        state.editingParent = emptyParent();
+        actions.goto('parent-form');
+        break;
+      case 'cancel-parent-form':
+        state.editingParent = null;
+        actions.goto('dashboard');
+        break;
+      case 'set-parent-preferred': {
+        captureParentFormInputs();
+        if (state.editingParent) state.editingParent.preferredContact = target.dataset.value;
+        render();
+        break;
+      }
+      case 'delete-parent': actions.deleteParent(id); state.editingParent = null; actions.goto('dashboard'); break;
 
       // ---- Children ----
       case 'new-child': actions.goto('form', {editing: emptyChild()}); break;

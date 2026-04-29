@@ -117,14 +117,14 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 1.7.0
+  // Version 1.7.1
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '1.7.0';
+  const APP_VERSION = '1.7.1';
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -1116,7 +1116,7 @@
         ${formSection('Child Information', `
           ${field('fullName','Full Name','text',c.fullName,{required:true})}
           <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="two-col">
-            ${field('birthdate','Birthdate','date',c.birthdate)}
+            ${field('birthdate','Birthdate','date',c.birthdate,{hint:'Format: MM/DD/YYYY'})}
             <div>
               <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Age</label>
               <input class="input-field" value="${calcAge(c.birthdate) || ''}" disabled placeholder="From birthdate" id="age-display">
@@ -1145,7 +1145,7 @@
           ` : ''}
           ${field('parentNames','Names','text',c.parentNames,{required:true})}
           <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="two-col">
-            ${field('phoneNumbers','Phone Numbers','text',c.phoneNumbers,{required:true})}
+            ${field('phoneNumbers','Phone Numbers','text',c.phoneNumbers,{required:true,hint:'Format: (555) 123-4567 — separate multiple with commas'})}
             ${field('emails','Emails','email',c.emails)}
           </div>
           <div>
@@ -1170,7 +1170,7 @@
           </div>
           ${field('medicalConditions','Medical Conditions','textarea',c.medicalConditions)}
           ${field('specialNeeds','Special Needs / Accommodations','textarea',c.specialNeeds)}
-          ${field('emergencyContact','Emergency Contact','text',c.emergencyContact,{required:true,hint:'Name & phone of someone other than the parent'})}
+          ${field('emergencyContact','Emergency Contact','text',c.emergencyContact,{required:true,hint:'Name & phone of someone other than the parent — phone format: (555) 123-4567'})}
           ${field('authorizedPickup','Authorized Pick-Up List','textarea',c.authorizedPickup,{hint:'Names of anyone allowed to collect the child'})}
         `, 'danger')}
 
@@ -1472,7 +1472,7 @@
           `)}
 
           ${formSection('Contact', `
-            ${field('phoneNumbers','Phone Numbers','text',p.phoneNumbers,{hint:'Separate multiple with commas'})}
+            ${field('phoneNumbers','Phone Numbers','text',p.phoneNumbers,{hint:'Format: (555) 123-4567 — separate multiple with commas'})}
             ${field('emails','Email Addresses','text',p.emails,{hint:'Separate multiple with commas'})}
             <div>
               <label class="label-text" style="display:block;margin-bottom:.375rem;">Preferred Contact</label>

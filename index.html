@@ -166,14 +166,14 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 1.8.2
+  // Version 1.9.0
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '1.8.2';
+  const APP_VERSION = '1.9.0';
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -195,6 +195,8 @@
     search: '',
     parentSearch: '',
     checkinSearch: '',
+    checkoutOtherFor: null,    // attendance record ID currently in "specify other adult" mode
+    checkoutOtherName: '',     // text being typed in the Other input
     // Backend
     config: null,                 // null until configured
     online: true,                 // last sync attempt succeeded
@@ -353,6 +355,22 @@
     if (isNaN(d.getTime())) return '';
     return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
   };
+
+  // Backfill defaults for any legacy records that were created before
+  // certain fields existed. Keeps the rest of the code from having to
+  // null-check everywhere.
+  const normalizeChild = (c) => {
+    if (!Array.isArray(c.parentIds)) c.parentIds = [];
+    if (!Array.isArray(c.authorizedPickupIds)) c.authorizedPickupIds = [];
+    return c;
+  };
+  const normalizeParent = (p) => {
+    // Existing parents created before v1.9 don't have these fields. Default
+    // them generously so existing records don't suddenly become unauthorized.
+    if (p.relationship === '' || p.relationship == null) p.relationship = 'Parent';
+    if (p.authorizedForPickup === '' || p.authorizedForPickup == null) p.authorizedForPickup = true;
+    return p;
+  };
   const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '';
   const calcAge = (bd) => {
     if (!bd) return '';
@@ -370,12 +388,14 @@
     phoneNumbers:'', emails:'', preferredContact:'Phone', allergies:'', allergySeverity:'None',
     medicalConditions:'', specialNeeds:'', emergencyContact:'', authorizedPickup:'',
     photoConsent:false, newsletterOptIn:false, visitorStatus:'Member', churchMembership:'',
-    prayerRequests:'', classroom:'', createdAt:''
+    prayerRequests:'', classroom:'', parentIds:[], authorizedPickupIds:[], createdAt:''
   });
 
   const emptyParent = () => ({
     id:'', fullName:'', phoneNumbers:'', emails:'', preferredContact:'Phone',
-    address:'', churchMembership:'', notes:'', createdAt:''
+    address:'', churchMembership:'', notes:'',
+    relationship:'Parent', authorizedForPickup:true,
+    createdAt:''
   });
 
   // Sample data shown only in demo mode (no backend configured)
@@ -394,18 +414,18 @@
 
     // If no config, show login screen with demo data
     if (!state.config) {
-      state.children = store.load(KEYS.CHILDREN, null) || seed;
+      state.children = (store.load(KEYS.CHILDREN, null) || seed).map(normalizeChild);
       state.attendance = store.load(KEYS.ATTENDANCE, []);
-      state.parents = store.load(KEYS.PARENTS, []);
+      state.parents = store.load(KEYS.PARENTS, []).map(normalizeParent);
       state.view = 'login';
       render();
       return;
     }
 
     // Load from cache immediately for fast paint
-    state.children = store.load(KEYS.CHILDREN, []);
+    state.children = store.load(KEYS.CHILDREN, []).map(normalizeChild);
     state.attendance = store.load(KEYS.ATTENDANCE, []);
-    state.parents = store.load(KEYS.PARENTS, []);
+    state.parents = store.load(KEYS.PARENTS, []).map(normalizeParent);
     state.view = 'dashboard';
     render();
 
@@ -421,9 +441,9 @@
     updateHeaderStatus();
     try {
       const data = await api.get();
-      state.children = data.children || [];
+      state.children = (data.children || []).map(normalizeChild);
       state.attendance = data.attendance || [];
-      state.parents = data.parents || [];
+      state.parents = (data.parents || []).map(normalizeParent);
       state.backendVersion = data.backendVersion || null;
       saveCache();
       state.online = true;
@@ -486,9 +506,9 @@
         const data = await api.get();
         // Success — save config, load data
         store.save(KEYS.CONFIG, state.config);
-        state.children = data.children || [];
+        state.children = (data.children || []).map(normalizeChild);
         state.attendance = data.attendance || [];
-        state.parents = data.parents || [];
+        state.parents = (data.parents || []).map(normalizeParent);
         state.backendVersion = data.backendVersion || null;
         saveCache();
         state.online = true;
@@ -600,14 +620,24 @@
       toast(`Checked in ${c.fullName}`);
     },
 
-    async checkOut(recId) {
+    async checkOut(recId, checkOutBy) {
       const existing = state.attendance.find(a => a.id === recId);
       if (!existing) return;
-      const updated = Object.assign({}, existing, { checkOutAt: nowISO() });
+      const updated = Object.assign({}, existing, {
+        checkOutAt: nowISO(),
+        checkOutBy: checkOutBy || ''
+      });
       await syncAction('updateAttendance', { record: updated }, () => {
         state.attendance = state.attendance.map(a => a.id === recId ? updated : a);
       });
-      toast('Checked out');
+      // Friendlier toast that names who picked up
+      if (checkOutBy) {
+        const p = state.parents.find(x => x.id === checkOutBy);
+        const who = p ? p.fullName : checkOutBy;
+        toast(`Released to ${who}`);
+      } else {
+        toast('Checked out');
+      }
     },
 
     exportJSON() {
@@ -1119,6 +1149,39 @@
         </div>
 
         <div class="grid-detail">
+          ${(c.parentIds || []).length > 0 ? `
+            <div class="card" style="padding:1.25rem;margin-bottom:1.25rem;">
+              <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.875rem;">
+                ${icon('users','icon icon-sm')}
+                <h3 class="font-display" style="font-size:1.1rem;margin:0;color:var(--ink);">Linked Parents/Guardians</h3>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:.5rem;">
+                ${c.parentIds.map(pid => {
+                  const p = state.parents.find(x => x.id === pid);
+                  if (!p) return `<div style="font-size:.8rem;color:var(--ink-soft);font-style:italic;">[Linked parent record no longer exists]</div>`;
+                  const auth = p.authorizedForPickup !== false;
+                  const rel = p.relationship || 'Parent';
+                  return `
+                    <div style="display:flex;align-items:center;gap:.5rem;padding:.625rem .75rem;border-radius:3px;background:var(--cream-soft);border-left:3px solid ${auth ? 'var(--sage)' : 'var(--danger)'};">
+                      <div style="flex:1;min-width:0;">
+                        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+                          <span style="font-weight:600;color:var(--ink);">${esc(p.fullName)}</span>
+                          <span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .375rem;border-radius:2px;background:var(--paper);color:var(--ink-soft);">${esc(rel)}</span>
+                          ${auth
+                            ? `<span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .375rem;border-radius:2px;background:var(--sage-dark);color:var(--cream-soft);">✓ Authorized</span>`
+                            : `<span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .375rem;border-radius:2px;background:var(--danger);color:var(--cream-soft);">✗ Not Authorized</span>`
+                          }
+                        </div>
+                        <div style="font-size:.75rem;color:var(--ink-soft);margin-top:.25rem;">
+                          ${p.phoneNumbers ? esc(p.phoneNumbers) : ''}${p.phoneNumbers && p.emails ? ' · ' : ''}${p.emails ? esc(p.emails) : ''}
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          ` : ''}
           ${detailSection('Parent &amp; Guardian', 'phone', [
             ['Names', c.parentNames],
             ['Phone', c.phoneNumbers],
@@ -1227,29 +1290,58 @@
         `)}
 
         ${formSection('Parent / Guardian', `
-          ${state.parents && state.parents.length > 0 ? `
-            <div>
-              <label class="label-text" style="display:block;margin-bottom:.375rem;">Pick from existing parents/guardians</label>
-              <select class="input-field" data-action="prefill-from-parent">
-                <option value="">— Select to autofill below —</option>
-                ${[...state.parents].sort((a,b) => (a.fullName||'').localeCompare(b.fullName||'')).map(p =>
-                  `<option value="${esc(p.id)}">${esc(p.fullName)}${p.phoneNumbers ? ' · ' + esc(p.phoneNumbers) : ''}</option>`
-                ).join('')}
-              </select>
-              <p style="font-size:.75rem;color:var(--ink-soft);margin:.375rem 0 0;font-style:italic;">Optional — fills name, phone, email, and preferred contact below. You can still edit any field after.</p>
-            </div>
-          ` : ''}
-          ${field('parentNames','Names','text',c.parentNames,{required:true})}
-          <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="two-col">
-            ${field('phoneNumbers','Phone Numbers','text',c.phoneNumbers,{required:true,hint:'Format: (555) 123-4567 — separate multiple with commas'})}
-            ${field('emails','Emails','email',c.emails)}
-          </div>
           <div>
-            <label class="label-text" style="display:block;margin-bottom:.375rem;">Preferred Contact Method</label>
-            <div style="display:flex;gap:.5rem;">
-              ${['Phone','Text','Email'].map(opt => `
-                <button type="button" class="btn" data-action="set-preferred" data-value="${opt}" style="padding:.5rem 1rem;font-size:.875rem;border-radius:3px;flex:1;border:1px solid var(--divider);background:${c.preferredContact===opt?'var(--sage-dark)':'var(--cream-soft)'};color:${c.preferredContact===opt?'var(--cream-soft)':'var(--ink)'};">${opt}</button>
-              `).join('')}
+            <label class="label-text" style="display:block;margin-bottom:.375rem;">Linked Parent/Guardian Records</label>
+            ${(c.parentIds || []).length > 0
+              ? `<div style="display:flex;flex-direction:column;gap:.375rem;margin-bottom:.5rem;">
+                  ${c.parentIds.map(pid => {
+                    const p = state.parents.find(x => x.id === pid);
+                    if (!p) return '';
+                    const auth = p.authorizedForPickup !== false;
+                    const rel = p.relationship || 'Parent';
+                    return `
+                      <div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .625rem;border-radius:3px;background:var(--cream-soft);border:1px solid var(--divider);">
+                        <span style="font-weight:600;font-size:.875rem;color:var(--ink);flex:1;min-width:0;">${esc(p.fullName)}</span>
+                        <span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .375rem;border-radius:2px;background:var(--paper);color:var(--ink-soft);">${esc(rel)}</span>
+                        ${auth
+                          ? `<span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .375rem;border-radius:2px;background:var(--sage-dark);color:var(--cream-soft);">✓ Auth</span>`
+                          : `<span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .375rem;border-radius:2px;background:var(--danger);color:var(--cream-soft);">Not Auth</span>`
+                        }
+                        <button type="button" class="btn" style="padding:.25rem .5rem;font-size:.75rem;background:transparent;color:var(--ink-soft);" data-action="unlink-parent" data-id="${esc(p.id)}" title="Remove link">✕</button>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>`
+              : `<p style="font-size:.8rem;color:var(--ink-soft);margin:0 0 .5rem;font-style:italic;">No parents linked yet. Link an existing record below, or fill in the name fields if no parent record exists.</p>`
+            }
+            ${(() => {
+              const linkedSet = new Set(c.parentIds || []);
+              const available = (state.parents || []).filter(p => !linkedSet.has(p.id));
+              if (available.length === 0 && (c.parentIds||[]).length === 0) return '';
+              return available.length > 0 ? `
+                <select class="input-field" data-action="link-parent">
+                  <option value="">— Link an existing parent/guardian —</option>
+                  ${[...available].sort((a,b) => (a.fullName||'').localeCompare(b.fullName||'')).map(p =>
+                    `<option value="${esc(p.id)}">${esc(p.fullName)}${p.relationship ? ' (' + esc(p.relationship) + ')' : ''}${p.authorizedForPickup === false ? ' — not authorized' : ''}</option>`
+                  ).join('')}
+                </select>
+                <p style="font-size:.75rem;color:var(--ink-soft);margin:.375rem 0 0;font-style:italic;">Linked parents will auto-fill the name/contact fields below if they're empty.</p>
+              ` : `<p style="font-size:.75rem;color:var(--ink-soft);margin:.5rem 0 0;font-style:italic;">All registered parents are already linked. Register more from the Parent/Guardian Roster.</p>`;
+            })()}
+          </div>
+          <div style="border-top:1px solid var(--divider);padding-top:1rem;margin-top:1rem;">
+            ${field('parentNames','Names','text',c.parentNames,{required:true,hint:'Comma-separated. Auto-filled when linking parents above.'})}
+            <div style="display:grid;grid-template-columns:1fr;gap:1rem;margin-top:.75rem;" class="two-col">
+              ${field('phoneNumbers','Phone Numbers','text',c.phoneNumbers,{required:true,hint:'Format: (555) 123-4567 — separate multiple with commas'})}
+              ${field('emails','Emails','email',c.emails)}
+            </div>
+            <div style="margin-top:.75rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Preferred Contact Method</label>
+              <div style="display:flex;gap:.5rem;">
+                ${['Phone','Text','Email'].map(opt => `
+                  <button type="button" class="btn" data-action="set-preferred" data-value="${opt}" style="padding:.5rem 1rem;font-size:.875rem;border-radius:3px;flex:1;border:1px solid var(--divider);background:${c.preferredContact===opt?'var(--sage-dark)':'var(--cream-soft)'};color:${c.preferredContact===opt?'var(--cream-soft)':'var(--ink)'};">${opt}</button>
+                `).join('')}
+              </div>
             </div>
           </div>
         `)}
@@ -1445,22 +1537,49 @@
           </div>
           ${activeToday.length === 0
             ? `<p style="font-size:.875rem;font-style:italic;color:var(--ink-soft);">No children currently checked in. Head to Check-In to get started.</p>`
-            : `<div class="grid-checkin" style="max-height:none;">
+            : `<div style="display:flex;flex-direction:column;gap:1rem;">
                 ${activeToday.map(rec => {
                   const c = state.children.find(x => x.id === rec.childId);
                   if (!c) return '';
                   const hasAlert = c.allergySeverity === 'Severe' || (c.medicalConditions && c.medicalConditions.trim());
+                  // Find authorized linked parents (excluding ones marked "not authorized")
+                  const linkedParents = (c.parentIds || [])
+                    .map(pid => state.parents.find(p => p.id === pid))
+                    .filter(Boolean);
+                  const authorizedParents = linkedParents.filter(p => p.authorizedForPickup !== false);
+                  const showingOtherInput = state.checkoutOtherFor === rec.id;
                   return `
-                    <div style="display:flex;align-items:center;justify-content:space-between;padding:.875rem;border-radius:3px;background:var(--cream-soft);">
-                      <div style="display:flex;align-items:center;gap:.625rem;min-width:0;">
+                    <div style="padding:1rem;border-radius:3px;background:var(--cream-soft);border-left:3px solid ${hasAlert ? 'var(--danger)' : 'var(--sage)'};">
+                      <div style="display:flex;align-items:flex-start;gap:.625rem;margin-bottom:.75rem;">
                         ${hasAlert ? icon('alert','icon icon-sm') : ''}
-                        <div style="min-width:0;">
-                          <div style="font-weight:600;font-size:.95rem;color:var(--ink);">${esc(c.fullName)}</div>
+                        <div style="min-width:0;flex:1;">
+                          <div style="font-weight:600;font-size:1rem;color:var(--ink);">${esc(c.fullName)}</div>
                           <div style="font-size:.75rem;color:var(--ink-soft);">In at ${fmtTime(rec.checkInAt)}${c.classroom ? ' · ' + esc(c.classroom) : ''}</div>
-                          ${c.authorizedPickup ? `<div style="font-size:.7rem;color:var(--ink-soft);margin-top:.125rem;">Authorized: ${esc(c.authorizedPickup)}</div>` : ''}
+                          ${c.authorizedPickup ? `<div style="font-size:.7rem;color:var(--ink-soft);margin-top:.125rem;font-style:italic;">Pickup notes: ${esc(c.authorizedPickup)}</div>` : ''}
                         </div>
                       </div>
-                      <button class="btn btn-terra" style="padding:.5rem .875rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;flex-shrink:0;border-radius:3px;" data-action="check-out" data-id="${rec.id}">${icon('logout','icon icon-sm')} Check Out</button>
+                      <div style="font-size:.75rem;color:var(--ink-soft);font-weight:600;letter-spacing:.05em;text-transform:uppercase;margin-bottom:.5rem;">Releasing to:</div>
+                      ${authorizedParents.length > 0
+                        ? `<div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
+                            ${authorizedParents.map(p => `
+                              <button class="btn btn-terra" style="padding:.5rem .75rem;font-size:.85rem;display:flex;align-items:center;gap:.375rem;border-radius:3px;" data-action="checkout-with" data-rec-id="${esc(rec.id)}" data-parent-id="${esc(p.id)}">${icon('logout','icon icon-sm')} ${esc(p.fullName)} <span style="font-size:.65rem;opacity:.85;font-weight:400;">(${esc(p.relationship || 'Parent')})</span></button>
+                            `).join('')}
+                          </div>`
+                        : `<div style="padding:.625rem;border-radius:3px;background:var(--paper);font-size:.8rem;color:var(--ink-soft);font-style:italic;margin-bottom:.5rem;">
+                            ${linkedParents.length > 0
+                              ? `${linkedParents.length} linked parent(s) but none marked authorized. Use "Other" below or update authorization on the parent record.`
+                              : `No parent records linked to this child. Use "Other" below to specify, or link parents on the child's registration.`
+                            }
+                          </div>`
+                      }
+                      ${showingOtherInput
+                        ? `<div style="display:flex;gap:.375rem;align-items:center;flex-wrap:wrap;">
+                            <input class="input-field" style="flex:1;min-width:10rem;padding:.5rem .625rem;font-size:.85rem;" placeholder="Name of person picking up" data-action="checkout-other-input" data-rec-id="${esc(rec.id)}" value="${esc(state.checkoutOtherName || '')}">
+                            <button class="btn btn-terra" style="padding:.5rem .75rem;font-size:.85rem;border-radius:3px;" data-action="checkout-confirm-other" data-rec-id="${esc(rec.id)}">Confirm</button>
+                            <button class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.85rem;" data-action="checkout-cancel-other">Cancel</button>
+                          </div>`
+                        : `<button class="btn btn-ghost" style="padding:.375rem .625rem;font-size:.8rem;color:var(--ink-soft);" data-action="checkout-other" data-rec-id="${esc(rec.id)}">+ Other authorized adult…</button>`
+                      }
                     </div>
                   `;
                 }).join('')}
@@ -1476,11 +1595,17 @@
                 ${checkedOutToday.map(rec => {
                   const c = state.children.find(x => x.id === rec.childId);
                   if (!c) return '';
+                  // checkOutBy may be a parent ID (linked record) or a free-text name (legacy/other)
+                  let pickedUpBy = '';
+                  if (rec.checkOutBy) {
+                    const p = state.parents.find(x => x.id === rec.checkOutBy);
+                    pickedUpBy = p ? p.fullName : rec.checkOutBy; // fallback to raw value if not a parent ID
+                  }
                   return `
                     <div style="display:flex;align-items:center;justify-content:space-between;padding:.75rem;border-radius:3px;background:var(--paper);border:1px solid var(--divider);">
                       <div style="min-width:0;">
                         <div style="font-weight:600;font-size:.875rem;color:var(--ink);">${esc(c.fullName)}</div>
-                        <div style="font-size:.75rem;color:var(--ink-soft);">In ${fmtTime(rec.checkInAt)} · Out ${fmtTime(rec.checkOutAt)}</div>
+                        <div style="font-size:.75rem;color:var(--ink-soft);">In ${fmtTime(rec.checkInAt)} · Out ${fmtTime(rec.checkOutAt)}${pickedUpBy ? ' · Released to ' + esc(pickedUpBy) : ''}</div>
                       </div>
                       ${icon('check','icon icon-sm')}
                     </div>
@@ -1526,20 +1651,31 @@
               ${state.parents.length === 0 ? `<button class="btn btn-primary" style="padding:.5rem 1rem;font-size:.875rem;border-radius:3px;" data-action="new-parent">${icon('user-plus','icon icon-sm')} Register the first one</button>` : ''}
             </div>`
           : `<div class="grid-roster">
-              ${filtered.map(p => `
-                <button class="card btn" style="padding:1.25rem;text-align:left;border-left:3px solid var(--sage);" data-action="edit-parent" data-id="${p.id}">
+              ${filtered.map(p => {
+                const auth = p.authorizedForPickup !== false;
+                const rel = p.relationship || 'Parent';
+                return `
+                <button class="card btn" style="padding:1.25rem;text-align:left;border-left:3px solid ${auth ? 'var(--sage)' : 'var(--danger)'};" data-action="edit-parent" data-id="${p.id}">
                   <div style="display:flex;align-items:flex-start;gap:.875rem;">
-                    <div class="avatar avatar-sm" style="background:var(--sage);">${initials(p.fullName)}</div>
+                    <div class="avatar avatar-sm" style="background:${auth ? 'var(--sage)' : 'var(--danger)'};">${initials(p.fullName)}</div>
                     <div style="min-width:0;flex:1;">
-                      <div style="font-weight:600;font-size:1rem;color:var(--ink);">${esc(p.fullName)}</div>
-                      <div style="font-size:.8rem;color:var(--ink-soft);margin-top:.25rem;">
+                      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+                        <span style="font-weight:600;font-size:1rem;color:var(--ink);">${esc(p.fullName)}</span>
+                        <span style="font-size:.7rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .5rem;border-radius:3px;background:var(--cream-soft);color:var(--ink-soft);border:1px solid var(--divider);">${esc(rel)}</span>
+                        ${auth
+                          ? `<span style="font-size:.7rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .5rem;border-radius:3px;background:var(--sage-dark);color:var(--cream-soft);">✓ Authorized</span>`
+                          : `<span style="font-size:.7rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .5rem;border-radius:3px;background:var(--danger);color:var(--cream-soft);">✗ Not Authorized</span>`
+                        }
+                      </div>
+                      <div style="font-size:.8rem;color:var(--ink-soft);margin-top:.375rem;">
                         ${p.phoneNumbers ? esc(p.phoneNumbers) : ''}${p.phoneNumbers && p.emails ? ' · ' : ''}${p.emails ? esc(p.emails) : ''}
                       </div>
                       ${p.churchMembership ? `<div style="font-size:.75rem;color:var(--ink-soft);margin-top:.125rem;">${esc(p.churchMembership)}</div>` : ''}
                     </div>
                   </div>
                 </button>
-              `).join('')}
+              `;
+              }).join('')}
             </div>`
         }
       </div>
@@ -1579,6 +1715,25 @@
               </div>
             </div>
             ${field('address','Address','textarea',p.address,{hint:'Optional'})}
+          `)}
+
+          ${formSection('Relationship &amp; Authorization', `
+            <div>
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Relationship to Child</label>
+              <select class="input-field" name="relationship">
+                ${['Parent','Guardian','Grandparent','Aunt or Uncle','Other Family','Other'].map(opt => `<option value="${opt}"${p.relationship===opt?' selected':''}>${opt}</option>`).join('')}
+              </select>
+              <p style="font-size:.75rem;color:var(--ink-soft);margin:.375rem 0 0;font-style:italic;">How this person is related to the child(ren) in their care.</p>
+            </div>
+            <div style="margin-top:1rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Authorized for Check-In/Check-Out</label>
+              <div style="display:flex;gap:.5rem;">
+                ${[{val:true,label:'Yes — authorized'},{val:false,label:'No — not authorized'}].map(opt => `
+                  <button type="button" class="btn" data-action="set-parent-auth" data-value="${opt.val}" style="padding:.5rem 1rem;font-size:.875rem;border-radius:3px;flex:1;border:1px solid var(--divider);background:${p.authorizedForPickup===opt.val?(opt.val?'var(--sage-dark)':'var(--danger)'):'var(--cream-soft)'};color:${p.authorizedForPickup===opt.val?'var(--cream-soft)':'var(--ink)'};">${opt.label}</button>
+                `).join('')}
+              </div>
+              <p style="font-size:.75rem;color:var(--ink-soft);margin:.375rem 0 0;font-style:italic;">Only authorized adults will appear as check-out options.</p>
+            </div>
           `)}
 
           ${formSection('Ministry &amp; Engagement', `
@@ -1662,6 +1817,33 @@
       case 'checkin-child': actions.checkIn(id); actions.goto('checkin'); break;
       case 'check-in': actions.checkIn(id); break;
       case 'check-out': actions.checkOut(id); break;
+      case 'checkout-with': {
+        const recId = target.dataset.recId;
+        const parentId = target.dataset.parentId;
+        actions.checkOut(recId, parentId);
+        break;
+      }
+      case 'checkout-other': {
+        state.checkoutOtherFor = target.dataset.recId;
+        state.checkoutOtherName = '';
+        render();
+        break;
+      }
+      case 'checkout-cancel-other': {
+        state.checkoutOtherFor = null;
+        state.checkoutOtherName = '';
+        render();
+        break;
+      }
+      case 'checkout-confirm-other': {
+        const recId = target.dataset.recId;
+        const name = (state.checkoutOtherName || '').trim();
+        if (!name) { toast('Enter a name first', 'error'); break; }
+        state.checkoutOtherFor = null;
+        state.checkoutOtherName = '';
+        actions.checkOut(recId, name);
+        break;
+      }
       case 'cancel-form': actions.goto(state.selectedId ? 'child' : 'roster'); break;
       case 'cancel-parent-form': actions.goto('parents'); break;
       case 'export-json': actions.exportJSON(); break;
@@ -1692,6 +1874,27 @@
         render();
         break;
       }
+      case 'set-parent-auth': {
+        state.editingParent = state.editingParent || emptyParent();
+        state.editingParent.authorizedForPickup = target.dataset.value === 'true';
+        captureParentFormInputs();
+        render();
+        break;
+      }
+      case 'unlink-parent': {
+        captureFormInputs();
+        const c = state.editing || emptyChild();
+        c.parentIds = (c.parentIds || []).filter(pid => pid !== id);
+        // Optionally remove that parent's name from the parentNames text too
+        const removed = state.parents.find(p => p.id === id);
+        if (removed && c.parentNames) {
+          const names = c.parentNames.split(',').map(s => s.trim()).filter(s => s && s !== removed.fullName);
+          c.parentNames = names.join(', ');
+        }
+        state.editing = c;
+        render();
+        break;
+      }
       case 'toggle': {
         state.editing = state.editing || emptyChild();
         const name = target.dataset.name;
@@ -1718,6 +1921,9 @@
       state.parentSearch = target.value;
       clearTimeout(window._searchT);
       window._searchT = setTimeout(() => { render(); const inp = document.querySelector('[data-action="search-parents"]'); if (inp) { inp.focus(); inp.setSelectionRange(state.parentSearch.length, state.parentSearch.length); } }, 100);
+    } else if (target.dataset.action === 'checkout-other-input') {
+      // Don't re-render — just capture the typed name
+      state.checkoutOtherName = target.value;
     } else if (target.name === 'birthdate') {
       // Live-update age display
       const age = calcAge(target.value);
@@ -1731,21 +1937,28 @@
     if (target.dataset.action === 'import-json') {
       const file = target.files && target.files[0];
       if (file) actions.importJSON(file);
-    } else if (target.dataset.action === 'prefill-from-parent') {
+    } else if (target.dataset.action === 'link-parent') {
       const parentId = target.value;
       if (!parentId) return;
       const parent = state.parents.find(p => p.id === parentId);
       if (!parent) return;
-      // Capture whatever the user has typed so far so we don't lose other fields
       captureFormInputs();
       const c = state.editing || emptyChild();
-      c.parentNames = parent.fullName || '';
-      c.phoneNumbers = parent.phoneNumbers || '';
-      c.emails = parent.emails || '';
-      c.preferredContact = parent.preferredContact || 'Phone';
+      if (!Array.isArray(c.parentIds)) c.parentIds = [];
+      if (!c.parentIds.includes(parentId)) c.parentIds.push(parentId);
+      // Auto-fill text fields if they're empty so legacy display still works
+      const existingNames = (c.parentNames || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (!existingNames.includes(parent.fullName)) {
+        c.parentNames = existingNames.concat([parent.fullName]).join(', ');
+      }
+      if (!c.phoneNumbers && parent.phoneNumbers) c.phoneNumbers = parent.phoneNumbers;
+      if (!c.emails && parent.emails) c.emails = parent.emails;
+      if ((!c.preferredContact || c.preferredContact === 'Phone') && parent.preferredContact) {
+        c.preferredContact = parent.preferredContact;
+      }
       state.editing = c;
       render();
-      toast(`Filled in ${parent.fullName}`);
+      toast(`Linked ${parent.fullName}`);
     }
   }
 
@@ -1790,6 +2003,9 @@
       data.visitorStatus = state.editing.visitorStatus || data.visitorStatus;
       data.photoConsent = state.editing.photoConsent != null ? state.editing.photoConsent : (data.photoConsent === 'true');
       data.newsletterOptIn = state.editing.newsletterOptIn != null ? state.editing.newsletterOptIn : (data.newsletterOptIn === 'true');
+      // Linked parent IDs are managed via the link/unlink buttons, not form fields
+      data.parentIds = Array.isArray(state.editing.parentIds) ? state.editing.parentIds.slice() : [];
+      data.authorizedPickupIds = Array.isArray(state.editing.authorizedPickupIds) ? state.editing.authorizedPickupIds.slice() : [];
       if (state.editing.id) data.id = state.editing.id;
       if (state.editing.createdAt) data.createdAt = state.editing.createdAt;
     }
@@ -1807,6 +2023,8 @@
     // Preserve button-driven fields from state.editingParent
     if (state.editingParent) {
       data.preferredContact = state.editingParent.preferredContact || data.preferredContact;
+      // authorizedForPickup is a boolean set via button group, not in FormData
+      data.authorizedForPickup = state.editingParent.authorizedForPickup !== false;
       if (state.editingParent.id) data.id = state.editingParent.id;
       if (state.editingParent.createdAt) data.createdAt = state.editingParent.createdAt;
     }

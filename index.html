@@ -117,14 +117,14 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 1.6.2
+  // Version 1.7.0
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '1.6.2';
+  const APP_VERSION = '1.7.0';
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -1131,6 +1131,18 @@
         `)}
 
         ${formSection('Parent / Guardian', `
+          ${state.parents && state.parents.length > 0 ? `
+            <div>
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Pick from existing parents/guardians</label>
+              <select class="input-field" data-action="prefill-from-parent">
+                <option value="">— Select to autofill below —</option>
+                ${[...state.parents].sort((a,b) => (a.fullName||'').localeCompare(b.fullName||'')).map(p =>
+                  `<option value="${esc(p.id)}">${esc(p.fullName)}${p.phoneNumbers ? ' · ' + esc(p.phoneNumbers) : ''}</option>`
+                ).join('')}
+              </select>
+              <p style="font-size:.75rem;color:var(--ink-soft);margin:.375rem 0 0;font-style:italic;">Optional — fills name, phone, email, and preferred contact below. You can still edit any field after.</p>
+            </div>
+          ` : ''}
           ${field('parentNames','Names','text',c.parentNames,{required:true})}
           <div style="display:grid;grid-template-columns:1fr;gap:1rem;" class="two-col">
             ${field('phoneNumbers','Phone Numbers','text',c.phoneNumbers,{required:true})}
@@ -1623,6 +1635,21 @@
     if (target.dataset.action === 'import-json') {
       const file = target.files && target.files[0];
       if (file) actions.importJSON(file);
+    } else if (target.dataset.action === 'prefill-from-parent') {
+      const parentId = target.value;
+      if (!parentId) return;
+      const parent = state.parents.find(p => p.id === parentId);
+      if (!parent) return;
+      // Capture whatever the user has typed so far so we don't lose other fields
+      captureFormInputs();
+      const c = state.editing || emptyChild();
+      c.parentNames = parent.fullName || '';
+      c.phoneNumbers = parent.phoneNumbers || '';
+      c.emails = parent.emails || '';
+      c.preferredContact = parent.preferredContact || 'Phone';
+      state.editing = c;
+      render();
+      toast(`Filled in ${parent.fullName}`);
     }
   }
 

@@ -166,20 +166,21 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 1.9.0
+  // Version 2.0.0
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '1.9.0';
+  const APP_VERSION = '2.0.0';
 
   const KEYS = {
     CHILDREN: 'cc:children',
     ATTENDANCE: 'cc:attendance',
     PARENTS: 'cc:parents',
-    CONFIG: 'cc:config',          // { backendUrl, passcode }
+    CONFIG: 'cc:config',          // { backendUrl, passcode }  — set during initial setup
+    SESSION: 'cc:session',        // { username, sessionToken, user } — set after login
     PENDING: 'cc:pending'         // queue of actions to retry when back online
   };
 
@@ -188,24 +189,33 @@
     children: [],
     attendance: [],
     parents: [],
+    users: [],                    // populated only when an Admin opens User Management
     view: 'dashboard',
     selectedId: null,
     editing: null,
     editingParent: null,
+    editingUser: null,            // user record being edited in User Management
+    addingUser: false,            // showing the New User form
+    resettingPasswordFor: null,   // username currently in password-reset confirm flow
+    showChangePassword: false,    // change-my-password modal open
     search: '',
     parentSearch: '',
     checkinSearch: '',
+    userSearch: '',
     checkoutOtherFor: null,    // attendance record ID currently in "specify other adult" mode
     checkoutOtherName: '',     // text being typed in the Other input
     // Backend
     config: null,                 // null until configured
+    session: null,                // { username, sessionToken, user } — null when logged out
     online: true,                 // last sync attempt succeeded
     syncing: false,               // request in flight
     pendingCount: 0,              // queued writes waiting to retry
     showSettings: false,
+    showUserMenu: false,
     bootError: null,              // shown on login screen
+    loginError: null,             // shown on login screen during username/password attempt
     backendVersion: null,         // version reported by backend on last load
-    loginDraft: { backendUrl: '', passcode: '' }  // preserves input across failed attempts
+    loginDraft: { backendUrl: '', passcode: '', username: '', password: '' }
   };
 
   // Storage
@@ -228,25 +238,43 @@
   const api = {
     async get() {
       if (!state.config) throw new Error('Not configured');
-      const url = state.config.backendUrl + '?passcode=' + encodeURIComponent(state.config.passcode);
+      let url = state.config.backendUrl + '?passcode=' + encodeURIComponent(state.config.passcode);
+      if (state.session) {
+        url += '&authUsername=' + encodeURIComponent(state.session.username);
+        url += '&sessionToken=' + encodeURIComponent(state.session.sessionToken);
+      }
       const res = await fetch(url, { method: 'GET', redirect: 'follow' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'Server error');
+      if (!data.ok) {
+        const e = new Error(data.error || 'Server error');
+        e.serverError = data.error;
+        throw e;
+      }
       return data;
     },
     async post(action, payload) {
       if (!state.config) throw new Error('Not configured');
+      const body = Object.assign({ action, passcode: state.config.passcode }, payload);
+      // Login itself doesn't need auth — every other action does
+      if (state.session && action !== 'login') {
+        body.authUsername = state.session.username;
+        body.sessionToken = state.session.sessionToken;
+      }
       // Apps Script requires text/plain to avoid CORS preflight
       const res = await fetch(state.config.backendUrl, {
         method: 'POST',
         redirect: 'follow',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(Object.assign({ action, passcode: state.config.passcode }, payload))
+        body: JSON.stringify(body)
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'Server error');
+      if (!data.ok) {
+        const e = new Error(data.error || 'Server error');
+        e.serverError = data.error;
+        throw e;
+      }
       return data;
     }
   };
@@ -272,6 +300,16 @@
     } catch (err) {
       state.online = false;
       state.syncing = false;
+      // Auth errors mean the session is no longer valid — force re-login
+      if (err.serverError && /Authentication required|Session expired|User not found|Account is inactive|Not signed in/.test(err.serverError)) {
+        forceLogout(err.serverError);
+        return;
+      }
+      // Permission errors should NOT be queued for retry — they'll always fail
+      if (err.serverError && /Permission denied/.test(err.serverError)) {
+        toast(err.serverError, 'error');
+        return;
+      }
       // Queue the action for retry
       const pending = store.load(KEYS.PENDING, []);
       pending.push({ action, payload, ts: Date.now() });
@@ -280,6 +318,18 @@
       updateHeaderStatus();
       toast('Saved locally. Will sync when back online.', 'warn');
     }
+  }
+
+  // Boot the user out of their current session when their token has expired,
+  // their account was deactivated, etc. Keeps the config (backend URL + passcode)
+  // so the next user can sign in without re-doing setup.
+  function forceLogout(reason) {
+    state.session = null;
+    state.users = [];
+    store.remove(KEYS.SESSION);
+    state.view = 'login';
+    state.bootError = reason || 'Your session ended. Please sign in again.';
+    render();
   }
 
   async function retryPending() {
@@ -408,11 +458,12 @@
   // Boot
   // ============================================================
   async function init() {
-    // Load config from storage
+    // Load config + session from storage
     state.config = store.load(KEYS.CONFIG, null);
+    state.session = store.load(KEYS.SESSION, null);
     state.pendingCount = store.load(KEYS.PENDING, []).length;
 
-    // If no config, show login screen with demo data
+    // If no config: show "connect" step of login screen with demo data
     if (!state.config) {
       state.children = (store.load(KEYS.CHILDREN, null) || seed).map(normalizeChild);
       state.attendance = store.load(KEYS.ATTENDANCE, []);
@@ -422,7 +473,18 @@
       return;
     }
 
-    // Load from cache immediately for fast paint
+    // Have config, but no session: show username/password step of login screen
+    if (!state.session) {
+      // Don't show stale cached children/attendance to a logged-out user
+      state.children = [];
+      state.attendance = [];
+      state.parents = [];
+      state.view = 'login';
+      render();
+      return;
+    }
+
+    // Have config AND session — load from cache for fast paint
     state.children = store.load(KEYS.CHILDREN, []).map(normalizeChild);
     state.attendance = store.load(KEYS.ATTENDANCE, []);
     state.parents = store.load(KEYS.PARENTS, []).map(normalizeParent);
@@ -453,6 +515,11 @@
     } catch (err) {
       state.online = false;
       state.syncing = false;
+      // Auth errors mean the session is no longer valid — force re-login
+      if (err.serverError && /Authentication required|Session expired|User not found|Account is inactive|Not signed in/.test(err.serverError)) {
+        forceLogout(err.serverError);
+        return;
+      }
       updateHeaderStatus();
       console.warn('Backend fetch failed, using cached data:', err.message);
     }
@@ -484,10 +551,15 @@
       render();
     },
 
+    // Step 1 of login: validate the backend URL + passcode by hitting the backend.
+    // Since LOGIN is now required, we call a no-data endpoint just to verify
+    // the passcode works. The backend will reject with "Authentication required"
+    // if the passcode is right but no session — which still tells us the URL
+    // and passcode are correct. Then we proceed to the sign-in step.
     async connect(backendUrl, passcode) {
       backendUrl = (backendUrl || '').trim();
       passcode = (passcode || '').trim();
-      state.loginDraft = { backendUrl, passcode: '' }; // preserve URL but never the passcode
+      state.loginDraft = Object.assign({}, state.loginDraft, { backendUrl, passcode: '' });
       if (!backendUrl || !passcode) {
         state.bootError = 'Both Web App URL and passcode are required.';
         render();
@@ -503,9 +575,61 @@
       state.syncing = true;
       render();
       try {
+        // Probe the backend. With LOGIN required and no session, expect
+        // a controlled "Authentication required" — that's success for this step.
+        await api.get();
+        // Unexpectedly succeeded with no auth — backend has login disabled or returned data
+        // Either way, save config and proceed to sign-in step
+      } catch (err) {
+        if (err.serverError && /Authentication required|Not signed in/.test(err.serverError)) {
+          // Expected: passcode worked, now we need to sign in
+        } else if (err.serverError && /Invalid passcode/.test(err.serverError)) {
+          state.config = null;
+          state.syncing = false;
+          state.bootError = 'Invalid passcode. Check your Apps Script PASSCODE constant.';
+          render();
+          return;
+        } else {
+          state.config = null;
+          state.syncing = false;
+          state.bootError = 'Could not connect: ' + err.message + '. Check your URL and that the Web App is deployed with access set to "Anyone".';
+          render();
+          return;
+        }
+      }
+      // Save config (passcode is fine — sheet's own protection still applies)
+      store.save(KEYS.CONFIG, state.config);
+      state.syncing = false;
+      state.bootError = null;
+      // Now show the sign-in step
+      render();
+    },
+
+    // Step 2 of login: username + password
+    async signIn(username, password) {
+      username = (username || '').trim();
+      state.loginDraft = Object.assign({}, state.loginDraft, { username });
+      if (!username || !password) {
+        state.loginError = 'Both username and password are required.';
+        render();
+        return;
+      }
+      state.loginError = null;
+      state.bootError = null;
+      state.syncing = true;
+      render();
+      try {
+        const result = await api.post('login', { username, password });
+        // Save session
+        state.session = {
+          username: result.user.username,
+          sessionToken: result.sessionToken,
+          user: result.user
+        };
+        store.save(KEYS.SESSION, state.session);
+        state.loginDraft = { backendUrl: '', passcode: '', username: '', password: '' };
+        // Load all the data
         const data = await api.get();
-        // Success — save config, load data
-        store.save(KEYS.CONFIG, state.config);
         state.children = (data.children || []).map(normalizeChild);
         state.attendance = data.attendance || [];
         state.parents = (data.parents || []).map(normalizeParent);
@@ -514,26 +638,45 @@
         state.online = true;
         state.syncing = false;
         state.view = 'dashboard';
-        state.loginDraft = { backendUrl: '', passcode: '' };
-        toast('Connected to your sheet.');
+        toast('Signed in. Welcome, ' + result.user.fullName + '.');
         render();
         retryPending();
       } catch (err) {
-        state.config = null;
         state.syncing = false;
-        state.bootError = 'Could not connect: ' + err.message + '. Check your URL and passcode, and make sure the Web App is deployed with access set to "Anyone".';
+        state.loginError = err.serverError || err.message || 'Sign-in failed.';
         render();
       }
     },
 
+    // Sign out — clear session but keep config so the next user can sign in fast
+    signOut() {
+      state.session = null;
+      state.users = [];
+      state.children = [];
+      state.attendance = [];
+      state.parents = [];
+      store.remove(KEYS.SESSION);
+      store.remove(KEYS.CHILDREN);
+      store.remove(KEYS.ATTENDANCE);
+      store.remove(KEYS.PARENTS);
+      state.view = 'login';
+      state.bootError = null;
+      state.loginError = null;
+      state.showSettings = false;
+      render();
+    },
+
+    // Settings → Disconnect: also blow away config
     disconnect() {
-      if (!confirm('Disconnect from Google Sheets? Local cache will be cleared and you\'ll be asked for the URL and passcode again.')) return;
+      if (!confirm('Disconnect this device from Google Sheets? You\'ll need the Web App URL and passcode to set it up again.')) return;
       store.remove(KEYS.CONFIG);
+      store.remove(KEYS.SESSION);
       store.remove(KEYS.CHILDREN);
       store.remove(KEYS.ATTENDANCE);
       store.remove(KEYS.PARENTS);
       store.remove(KEYS.PENDING);
       state.config = null;
+      state.session = null;
       state.children = seed;
       state.attendance = [];
       state.parents = [];
@@ -541,6 +684,84 @@
       state.showSettings = false;
       state.view = 'login';
       render();
+    },
+
+    async changeOwnPassword(currentPassword, newPassword, confirmPassword) {
+      if (!currentPassword || !newPassword) { toast('All password fields are required.', 'error'); return; }
+      if (newPassword.length < 6) { toast('New password must be at least 6 characters.', 'error'); return; }
+      if (newPassword !== confirmPassword) { toast('New password and confirmation do not match.', 'error'); return; }
+      try {
+        const result = await api.post('changeOwnPassword', { currentPassword, newPassword });
+        // Backend returns a fresh session token (since hash changed)
+        if (result.sessionToken) {
+          state.session.sessionToken = result.sessionToken;
+          store.save(KEYS.SESSION, state.session);
+        }
+        state.showChangePassword = false;
+        render();
+        toast('Password updated.');
+      } catch (err) {
+        toast(err.serverError || err.message || 'Could not change password.', 'error');
+      }
+    },
+
+    async loadUsers() {
+      try {
+        const result = await api.post('listUsers', {});
+        state.users = (result.users || []).slice().sort((a, b) => (a.fullName || a.username).localeCompare(b.fullName || b.username));
+        render();
+      } catch (err) {
+        toast(err.serverError || err.message || 'Could not load users.', 'error');
+      }
+    },
+
+    async addUser(userInput, password) {
+      if (!password || password.length < 6) { toast('Password must be at least 6 characters.', 'error'); return; }
+      try {
+        await api.post('addUser', { user: userInput, password });
+        state.addingUser = false;
+        state.editingUser = null;
+        await this.loadUsers();
+        toast('User created: ' + userInput.username);
+      } catch (err) {
+        toast(err.serverError || err.message || 'Could not add user.', 'error');
+      }
+    },
+
+    async updateUser(userInput) {
+      try {
+        await api.post('updateUser', { user: userInput });
+        state.editingUser = null;
+        await this.loadUsers();
+        toast('User updated: ' + userInput.username);
+      } catch (err) {
+        toast(err.serverError || err.message || 'Could not update user.', 'error');
+      }
+    },
+
+    async deleteUser(username) {
+      if (!confirm('Delete user "' + username + '"? This cannot be undone.')) return;
+      try {
+        await api.post('deleteUser', { username });
+        state.editingUser = null;
+        await this.loadUsers();
+        toast('User deleted: ' + username, 'warn');
+      } catch (err) {
+        toast(err.serverError || err.message || 'Could not delete user.', 'error');
+      }
+    },
+
+    async resetUserPassword(username, newPassword, confirmPassword) {
+      if (!newPassword || newPassword.length < 6) { toast('New password must be at least 6 characters.', 'error'); return; }
+      if (newPassword !== confirmPassword) { toast('New password and confirmation do not match.', 'error'); return; }
+      try {
+        await api.post('resetUserPassword', { username, newPassword });
+        state.resettingPasswordFor = null;
+        render();
+        toast('Password reset for ' + username + '. Share the new password with them.');
+      } catch (err) {
+        toast(err.serverError || err.message || 'Could not reset password.', 'error');
+      }
     },
 
     async refresh() {
@@ -680,6 +901,7 @@
 
     toggleSettings() {
       state.showSettings = !state.showSettings;
+      state.showUserMenu = false;
       render();
     }
   };
@@ -738,11 +960,32 @@
             <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
               ${syncStatusHTML()}
               ${connected ? `<button class="btn btn-ghost" style="padding:.5rem;font-size:.875rem;display:flex;align-items:center;" data-action="refresh" title="Refresh from sheet">${icon('refresh','icon icon-sm')}</button>` : ''}
-              <button class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="export-json" title="Download a JSON backup">${icon('download','icon icon-sm')} Backup</button>
+              ${isAdmin() ? `<button class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="export-json" title="Download a JSON backup">${icon('download','icon icon-sm')} Backup</button>
               <label class="btn btn-ghost" style="padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;cursor:pointer;" title="Restore from a backup file">
                 ${icon('upload','icon icon-sm')} Restore
                 <input type="file" accept="application/json" class="hidden" data-action="import-json">
-              </label>
+              </label>` : ''}
+              ${state.session ? `
+                <div style="position:relative;">
+                  <button class="btn btn-ghost" style="padding:.375rem .625rem;font-size:.85rem;display:flex;align-items:center;gap:.5rem;border:1px solid var(--divider);border-radius:999px;" data-action="toggle-user-menu" title="Account">
+                    <div class="avatar avatar-sm" style="width:1.5rem;height:1.5rem;font-size:.7rem;background:var(--sage-dark);">${esc(initials(state.session.user.fullName || state.session.user.username))}</div>
+                    <span style="font-weight:600;">${esc(state.session.user.fullName || state.session.user.username)}</span>
+                    <span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .375rem;border-radius:2px;background:${isAdmin()?'var(--sage-dark)':'var(--terra)'};color:var(--cream-soft);">${esc(state.session.user.role)}</span>
+                  </button>
+                  ${state.showUserMenu ? `
+                    <div style="position:absolute;right:0;top:100%;margin-top:.5rem;background:var(--paper);border:1px solid var(--divider);border-radius:4px;box-shadow:0 10px 25px rgba(0,0,0,.1);min-width:14rem;z-index:40;padding:.5rem;">
+                      <div style="padding:.625rem .75rem;border-bottom:1px solid var(--divider);margin-bottom:.5rem;">
+                        <div style="font-size:.875rem;font-weight:600;">${esc(state.session.user.fullName)}</div>
+                        <div style="font-size:.75rem;color:var(--ink-soft);">${esc(state.session.user.username)}${state.session.user.email ? ' · ' + esc(state.session.user.email) : ''}</div>
+                      </div>
+                      <button class="btn btn-ghost" style="width:100%;text-align:left;padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.5rem;" data-action="open-change-password">${icon('lock','icon icon-sm')} Change my password</button>
+                      ${isAdmin() ? `<button class="btn btn-ghost" style="width:100%;text-align:left;padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.5rem;" data-action="goto-users">${icon('users','icon icon-sm')} User management</button>` : ''}
+                      <button class="btn" style="width:100%;text-align:left;padding:.5rem .75rem;font-size:.875rem;display:flex;align-items:center;gap:.5rem;color:var(--danger);background:transparent;margin-top:.25rem;border-top:1px solid var(--divider);border-radius:0;" data-action="sign-out">${icon('logout','icon icon-sm')} Sign out</button>
+                    </div>
+                  ` : ''}
+                </div>
+              ` : ''}
+              ${isAdmin() ? `
               <div style="position:relative;">
                 <button class="btn btn-ghost" style="padding:.5rem;font-size:.875rem;display:flex;align-items:center;" data-action="toggle-settings" title="Settings">${icon('settings','icon icon-sm')}</button>
                 ${state.showSettings ? `
@@ -752,7 +995,7 @@
                       <div style="font-size:.75rem;word-break:break-all;color:var(--ink-soft);margin-bottom:.25rem;">Connected</div>
                       <div style="font-size:.7rem;word-break:break-all;color:var(--ink-soft);margin-bottom:.75rem;opacity:.7;">${esc(state.config.backendUrl.slice(0, 60))}…</div>
                       <button class="btn btn-ghost" style="width:100%;padding:.5rem;font-size:.875rem;margin-bottom:.5rem;" data-action="refresh">${icon('refresh','icon icon-sm')} Refresh from sheet</button>
-                      <button class="btn" style="width:100%;padding:.5rem;font-size:.875rem;color:var(--danger);border:1px solid var(--divider);background:transparent;" data-action="disconnect">${icon('logout','icon icon-sm')} Disconnect</button>
+                      <button class="btn" style="width:100%;padding:.5rem;font-size:.875rem;color:var(--danger);border:1px solid var(--divider);background:transparent;" data-action="disconnect">${icon('logout','icon icon-sm')} Disconnect this device</button>
                     ` : `
                       <div style="font-size:.75rem;color:var(--terra);margin-bottom:.75rem;">Demo mode — no backend</div>
                       <button class="btn btn-primary" style="width:100%;padding:.5rem;font-size:.875rem;border-radius:3px;" data-action="show-login">Connect Google Sheet</button>
@@ -760,6 +1003,7 @@
                   </div>
                 ` : ''}
               </div>
+              ` : ''}
             </div>
           </div>
         </div>
@@ -769,6 +1013,7 @@
             ${tab('roster','Roster','users')}
             ${tab('parents','Parents','users')}
             ${tab('checkin','Check-In','clipboard')}
+            ${isAdmin() ? tab('users','Users','users') : ''}
           </div>
         </nav>
       </header>
@@ -791,6 +1036,65 @@
           Version ${APP_VERSION}${state.backendVersion ? ` · backend ${state.backendVersion}${state.backendVersion !== APP_VERSION ? ' ⚠ mismatch' : ''}` : ''}
         </p>
       </footer>
+      ${state.showChangePassword ? renderChangePasswordModal() : ''}
+      ${state.resettingPasswordFor ? renderResetPasswordModal() : ''}
+    `;
+  }
+
+  function renderChangePasswordModal() {
+    return `
+      <div style="position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:1.5rem;" data-action="close-change-password">
+        <div class="card" style="width:100%;max-width:24rem;padding:1.75rem;" onclick="event.stopPropagation()">
+          <h3 class="font-display" style="font-size:1.25rem;margin:0 0 .25rem;color:var(--ink);">Change My Password</h3>
+          <p style="font-size:.8rem;color:var(--ink-soft);margin:0 0 1.25rem;">Signed in as ${esc((state.session && state.session.user && state.session.user.fullName) || '')}</p>
+          <form id="change-password-form">
+            <div style="margin-bottom:.75rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Current password</label>
+              <input class="input-field" name="currentPassword" type="password" autocomplete="current-password" required autofocus>
+            </div>
+            <div style="margin-bottom:.75rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">New password</label>
+              <input class="input-field" name="newPassword" type="password" autocomplete="new-password" required minlength="6">
+              <p style="font-size:.7rem;color:var(--ink-soft);margin:.25rem 0 0;">At least 6 characters.</p>
+            </div>
+            <div style="margin-bottom:1.25rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Confirm new password</label>
+              <input class="input-field" name="confirmPassword" type="password" autocomplete="new-password" required minlength="6">
+            </div>
+            <div style="display:flex;gap:.5rem;justify-content:flex-end;">
+              <button type="button" class="btn btn-ghost" style="padding:.5rem 1rem;" data-action="close-change-password">Cancel</button>
+              <button type="submit" class="btn btn-primary" style="padding:.5rem 1.25rem;font-weight:600;border-radius:3px;">Update Password</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderResetPasswordModal() {
+    const u = state.users.find(x => x.username === state.resettingPasswordFor);
+    return `
+      <div style="position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:1.5rem;" data-action="cancel-reset-password">
+        <div class="card" style="width:100%;max-width:24rem;padding:1.75rem;" onclick="event.stopPropagation()">
+          <h3 class="font-display" style="font-size:1.25rem;margin:0 0 .25rem;color:var(--ink);">Reset Password</h3>
+          <p style="font-size:.85rem;color:var(--ink-soft);margin:0 0 1.25rem;">Setting a new password for <strong>${esc((u && u.fullName) || state.resettingPasswordFor)}</strong> (<code>${esc(state.resettingPasswordFor)}</code>). They will need to use this new password to sign in.</p>
+          <form id="reset-password-form">
+            <div style="margin-bottom:.75rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">New password</label>
+              <input class="input-field" name="newPassword" type="text" required minlength="6" autofocus>
+              <p style="font-size:.7rem;color:var(--ink-soft);margin:.25rem 0 0;">At least 6 characters. Shown as text so you can copy it to share.</p>
+            </div>
+            <div style="margin-bottom:1.25rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Confirm new password</label>
+              <input class="input-field" name="confirmPassword" type="text" required minlength="6">
+            </div>
+            <div style="display:flex;gap:.5rem;justify-content:flex-end;">
+              <button type="button" class="btn btn-ghost" style="padding:.5rem 1rem;" data-action="cancel-reset-password">Cancel</button>
+              <button type="submit" class="btn btn-primary" style="padding:.5rem 1.25rem;font-weight:600;border-radius:3px;">Reset Password</button>
+            </div>
+          </form>
+        </div>
+      </div>
     `;
   }
 
@@ -809,13 +1113,27 @@
       case 'parent-form': return renderParentForm();
       case 'child': return renderChildDetail();
       case 'form': return renderForm();
+      case 'users': return renderUsers();
+      case 'user-form': return renderUserForm();
+      case 'coming-soon': return renderComingSoon();
       default: return renderDashboard();
     }
   }
 
+  // ---------- Helpers for role-based gating ----------
+  function isAdmin() { return state.session && state.session.user && state.session.user.role === 'Administrator'; }
+  function isCoordinator() { return state.session && state.session.user && state.session.user.role === 'Coordinator'; }
+
   // ---------- Login / Setup ----------
   function renderLogin() {
-    const savedUrl = (state.loginDraft && state.loginDraft.backendUrl) || (state.config && state.config.backendUrl) || '';
+    // Two-step: if no config, show backend URL + passcode "Connect" form
+    // If config exists but no session, show username/password "Sign In" form
+    if (!state.config) return renderConnectStep();
+    return renderSignInStep();
+  }
+
+  function renderConnectStep() {
+    const savedUrl = (state.loginDraft && state.loginDraft.backendUrl) || '';
     return `
       <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem 1.5rem;">
         <div style="width:100%;max-width:28rem;" class="anim-in">
@@ -825,7 +1143,7 @@
             </div>
             <div class="ornament" style="font-size:11px;letter-spacing:.3em;text-transform:uppercase;margin-bottom:.5rem;color:var(--terra);">Mt. Calvary M.B. Church</div>
             <h1 class="font-display" style="font-size:2rem;font-weight:600;margin:0;color:var(--ink);">Children's Ministry</h1>
-            <p style="margin-top:.5rem;color:var(--ink-soft);font-size:.9rem;">Connect to your Google Sheet to begin.</p>
+            <p style="margin-top:.5rem;color:var(--ink-soft);font-size:.9rem;">Step 1 of 2: Connect to your Google Sheet.</p>
           </div>
 
           <form class="card" style="padding:1.75rem;" id="login-form">
@@ -844,7 +1162,7 @@
             <div style="margin-bottom:1.25rem;">
               <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">Passcode</label>
               <input class="input-field" name="passcode" type="password" placeholder="Enter the shared passcode" required>
-              <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">Set in line 15 of your Apps Script file.</div>
+              <div style="font-size:.75rem;margin-top:.25rem;color:var(--ink-soft);">Set in your Apps Script PASSCODE constant.</div>
             </div>
 
             <button type="submit" class="btn btn-primary" style="width:100%;padding:.75rem;font-weight:600;border-radius:3px;display:flex;align-items:center;justify-content:center;gap:.5rem;${state.syncing ? 'opacity:.6;' : ''}" ${state.syncing ? 'disabled' : ''}>
@@ -864,11 +1182,65 @@
     `;
   }
 
+  function renderSignInStep() {
+    const savedUsername = (state.loginDraft && state.loginDraft.username) || '';
+    return `
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem 1.5rem;">
+        <div style="width:100%;max-width:28rem;" class="anim-in">
+          <div style="text-align:center;margin-bottom:2rem;">
+            <div style="width:64px;height:64px;border-radius:50%;background:var(--sage-dark);display:inline-flex;align-items:center;justify-content:center;color:var(--cream-soft);margin-bottom:1rem;">
+              ${icon('lock','icon icon-lg')}
+            </div>
+            <div class="ornament" style="font-size:11px;letter-spacing:.3em;text-transform:uppercase;margin-bottom:.5rem;color:var(--terra);">Mt. Calvary M.B. Church</div>
+            <h1 class="font-display" style="font-size:2rem;font-weight:600;margin:0;color:var(--ink);">Sign In</h1>
+            <p style="margin-top:.5rem;color:var(--ink-soft);font-size:.9rem;">Children's Ministry · Connected to your sheet</p>
+          </div>
+
+          <form class="card" style="padding:1.75rem;" id="signin-form">
+            ${state.bootError ? `
+              <div style="margin-bottom:1rem;padding:.75rem;border-radius:3px;background:var(--danger-bg);color:var(--danger);font-size:.875rem;">
+                ${esc(state.bootError)}
+              </div>
+            ` : ''}
+            ${state.loginError ? `
+              <div style="margin-bottom:1rem;padding:.75rem;border-radius:3px;background:var(--danger-bg);color:var(--danger);font-size:.875rem;">
+                ${esc(state.loginError)}
+              </div>
+            ` : ''}
+
+            <div style="margin-bottom:1rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Username</label>
+              <input class="input-field" name="username" type="text" autocomplete="username" placeholder="e.g. dsmith" value="${esc(savedUsername)}" required autofocus>
+            </div>
+
+            <div style="margin-bottom:1.25rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Password</label>
+              <input class="input-field" name="password" type="password" autocomplete="current-password" required>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="width:100%;padding:.75rem;font-weight:600;border-radius:3px;display:flex;align-items:center;justify-content:center;gap:.5rem;${state.syncing ? 'opacity:.6;' : ''}" ${state.syncing ? 'disabled' : ''}>
+              ${state.syncing ? icon('refresh','icon icon-sm') + ' Signing in…' : icon('login','icon icon-sm') + ' Sign In'}
+            </button>
+
+            <div style="text-align:center;margin-top:1rem;">
+              <button type="button" class="btn" style="background:transparent;font-size:.8rem;color:var(--ink-soft);text-decoration:underline;padding:.25rem;" data-action="back-to-connect">← Reconfigure connection</button>
+            </div>
+          </form>
+
+          <p style="text-align:center;font-size:.75rem;margin-top:1.5rem;color:var(--ink-soft);">
+            Forgot your password? Ask an Administrator to reset it for you.
+          </p>
+        </div>
+      </div>
+    `;
+  }
+
   // ---------- Dashboard ----------
   function renderDashboard() {
     const today = todayISO();
     const checkedInToday = state.attendance.filter(a => normalizeDate(a.date) === today);
     const presentNow = checkedInToday.filter(a => !a.checkOutAt);
+    const checkedOutNow = checkedInToday.filter(a => a.checkOutAt);
     const withAllergies = state.children.filter(c => c.allergies && c.allergies.trim() && c.allergies.toLowerCase() !== 'none');
     const severe = state.children.filter(c => c.allergySeverity === 'Severe');
     const medical = state.children.filter(c => c.medicalConditions && c.medicalConditions.trim());
@@ -912,13 +1284,14 @@
           <div class="ornament" style="font-size:11px;letter-spacing:.3em;text-transform:uppercase;margin-bottom:.75rem;color:var(--terra);">Welcome</div>
           <h2 class="font-display" style="font-size:3rem;font-weight:300;color:var(--ink);margin:0;">
             ${new Date().toLocaleDateString('en-US',{weekday:'long'})}, ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric'})}
+            <span style="font-size:1.5rem;color:var(--ink-soft);font-weight:300;margin-left:.5rem;">· ${new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true})}</span>
           </h2>
           <p style="margin-top:.75rem;font-style:italic;color:var(--ink-soft);">Caring for ${state.children.length} little ${state.children.length === 1 ? 'one' : 'ones'} and counting blessings.</p>
         </div>
 
         <div class="grid-stats">
           ${statTile('users','Total Enrolled',state.children.length,'sage','')}
-          ${statTile('check','Present Today',presentNow.length,'terra',`${checkedInToday.length} checked in`)}
+          ${statTile('check','Present Today',presentNow.length,'terra',`${checkedInToday.length} checked in${checkedOutNow.length > 0 ? ` · ${checkedOutNow.length} checked out` : ''}`)}
           ${statTile('alert','Allergy Alerts',withAllergies.length,'danger',`${severe.length} severe`)}
           ${statTile('sparkles','Visitors',visitors.length,'gold','')}
         </div>
@@ -930,6 +1303,8 @@
           ${actionCard('book','Full Roster – Children','Browse &amp; edit child records','goto-roster')}
           ${actionCard('users','Parent/Guardian Registration','Add a parent or guardian record','new-parent')}
           ${actionCard('book','Parents/Guardian Roster','Browse, edit &amp; remove parents','goto-parents')}
+          ${isAdmin() ? actionCard('users','User Management','Add, edit &amp; reset users','goto-users') : ''}
+          ${actionCard('sparkles','Coming Soon','Reports, audit log &amp; more','goto-coming-soon')}
         </div>
 
         <div style="display:grid;grid-template-columns:1fr;gap:1.5rem;" id="dash-bottom">
@@ -1232,9 +1607,9 @@
           }
         </div>
 
-        <div style="margin-top:2rem;display:flex;justify-content:flex-end;">
+        ${isAdmin() ? `<div style="margin-top:2rem;display:flex;justify-content:flex-end;">
           <button class="btn-danger" style="font-size:.875rem;display:flex;align-items:center;gap:.375rem;" data-action="delete-child" data-id="${c.id}">${icon('trash','icon icon-sm')} Remove child from roster</button>
-        </div>
+        </div>` : ''}
       </div>
     `;
   }
@@ -1742,11 +2117,167 @@
           `)}
 
           <div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.5rem;flex-wrap:wrap;">
-            ${!isNew ? `<button type="button" class="btn btn-danger" style="padding:.625rem 1.25rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;margin-right:auto;" data-action="delete-parent" data-id="${p.id}">${icon('trash','icon icon-sm')} Remove</button>` : ''}
+            ${!isNew && isAdmin() ? `<button type="button" class="btn btn-danger" style="padding:.625rem 1.25rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;margin-right:auto;" data-action="delete-parent" data-id="${p.id}">${icon('trash','icon icon-sm')} Remove</button>` : ''}
             <button type="button" class="btn btn-ghost" style="padding:.625rem 1.25rem;" data-action="cancel-parent-form">Cancel</button>
             <button type="submit" class="btn btn-primary" style="padding:.625rem 1.5rem;font-weight:600;border-radius:3px;display:flex;align-items:center;gap:.375rem;">${icon('check','icon icon-sm')} ${isNew ? 'Register' : 'Save changes'}</button>
           </div>
         </form>
+      </div>
+    `;
+  }
+
+  // ---------- Users (Admin-only) ----------
+  function renderUsers() {
+    if (!isAdmin()) {
+      return `<div class="card" style="padding:2rem;text-align:center;"><p style="color:var(--ink-soft);">User management is restricted to Administrators.</p></div>`;
+    }
+    const q = (state.userSearch || '').toLowerCase().trim();
+    const filtered = q ? state.users.filter(u =>
+      (u.username || '').toLowerCase().includes(q) ||
+      (u.fullName || '').toLowerCase().includes(q) ||
+      (u.email || '').toLowerCase().includes(q) ||
+      (u.role || '').toLowerCase().includes(q)
+    ) : state.users;
+    return `
+      <div class="anim-in">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+          <div>
+            <div class="label-text" style="color:var(--terra);">Administrator Tools</div>
+            <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">User Management</h2>
+          </div>
+          <button class="btn btn-primary" style="padding:.5rem 1rem;font-size:.875rem;font-weight:600;display:flex;align-items:center;gap:.5rem;border-radius:3px;" data-action="add-user">${icon('user-plus','icon icon-sm')} Add User</button>
+        </div>
+
+        <div style="position:relative;margin-bottom:1.25rem;">
+          <span style="position:absolute;left:.75rem;top:50%;transform:translateY(-50%);color:var(--ink-soft);">${icon('search','icon icon-sm')}</span>
+          <input class="input-field" style="padding-left:2.5rem;" placeholder="Search users by name, username, email, or role…" value="${esc(state.userSearch || '')}" data-action="search-users">
+        </div>
+
+        ${state.users.length === 0
+          ? `<div class="card" style="padding:2.5rem;text-align:center;">
+              <p style="font-size:.95rem;color:var(--ink-soft);margin:0 0 1rem;">No users loaded yet, or none exist.</p>
+              <button class="btn btn-primary" style="padding:.5rem 1rem;font-size:.875rem;border-radius:3px;" data-action="reload-users">${icon('refresh','icon icon-sm')} Load users</button>
+            </div>`
+          : (filtered.length === 0
+            ? `<div class="card" style="padding:2rem;text-align:center;"><p style="color:var(--ink-soft);">No users match your search.</p></div>`
+            : `<div class="grid-roster">
+                ${filtered.map(u => {
+                  const isMe = state.session && state.session.user && u.username.toLowerCase() === state.session.user.username.toLowerCase();
+                  const roleColor = u.role === 'Administrator' ? 'var(--sage-dark)' : 'var(--terra)';
+                  return `
+                  <div class="card" style="padding:1.25rem;border-left:3px solid ${u.active ? roleColor : 'var(--divider)'};${u.active ? '' : 'opacity:.6;'}">
+                    <div style="display:flex;align-items:flex-start;gap:.875rem;">
+                      <div class="avatar avatar-sm" style="background:${u.active ? roleColor : 'var(--ink-soft)'};">${initials(u.fullName || u.username)}</div>
+                      <div style="min-width:0;flex:1;">
+                        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+                          <span style="font-weight:600;font-size:1rem;color:var(--ink);">${esc(u.fullName || u.username)}</span>
+                          ${isMe ? `<span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .375rem;border-radius:2px;background:var(--cream-soft);color:var(--ink-soft);border:1px solid var(--divider);">YOU</span>` : ''}
+                          <span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .5rem;border-radius:2px;background:${roleColor};color:var(--cream-soft);">${esc(u.role)}</span>
+                          ${u.active ? '' : `<span style="font-size:.65rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:.125rem .5rem;border-radius:2px;background:var(--ink-soft);color:var(--cream-soft);">Inactive</span>`}
+                        </div>
+                        <div style="font-size:.8rem;color:var(--ink-soft);margin-top:.25rem;">
+                          <code style="font-size:.75rem;">${esc(u.username)}</code>${u.email ? ' · ' + esc(u.email) : ''}
+                        </div>
+                      </div>
+                    </div>
+                    <div style="display:flex;gap:.375rem;margin-top:.875rem;flex-wrap:wrap;">
+                      <button class="btn btn-ghost" style="padding:.375rem .625rem;font-size:.75rem;display:flex;align-items:center;gap:.25rem;" data-action="edit-user" data-username="${esc(u.username)}">${icon('settings','icon icon-sm')} Edit</button>
+                      <button class="btn btn-ghost" style="padding:.375rem .625rem;font-size:.75rem;display:flex;align-items:center;gap:.25rem;" data-action="reset-password" data-username="${esc(u.username)}">${icon('lock','icon icon-sm')} Reset password</button>
+                      ${!isMe ? `<button class="btn" style="padding:.375rem .625rem;font-size:.75rem;color:var(--danger);background:transparent;display:flex;align-items:center;gap:.25rem;margin-left:auto;" data-action="delete-user" data-username="${esc(u.username)}">${icon('trash','icon icon-sm')} Delete</button>` : ''}
+                    </div>
+                  </div>
+                `;
+                }).join('')}
+              </div>`
+          )
+        }
+      </div>
+    `;
+  }
+
+  function renderUserForm() {
+    if (!isAdmin()) {
+      return `<div class="card" style="padding:2rem;text-align:center;"><p style="color:var(--ink-soft);">User management is restricted to Administrators.</p></div>`;
+    }
+    const u = state.editingUser || { username: '', fullName: '', email: '', role: 'Coordinator', active: true };
+    const isNew = state.addingUser;
+    const isMe = state.session && state.session.user && u.username && u.username.toLowerCase() === state.session.user.username.toLowerCase();
+    return `
+      <div class="anim-in" style="max-width:42rem;">
+        <button class="btn" style="background:transparent;font-size:.875rem;margin-bottom:1rem;display:flex;align-items:center;gap:.25rem;color:var(--ink-soft);" data-action="cancel-user-form">${icon('arrow-left','icon icon-sm')} Back to users</button>
+
+        <div style="margin-bottom:1.5rem;">
+          <div class="label-text" style="color:var(--terra);">${isNew ? 'New User' : 'Editing User'}</div>
+          <h2 class="font-display" style="font-size:1.875rem;margin:.25rem 0 0;color:var(--ink);">${isNew ? 'Add a User' : esc(u.fullName || u.username)}</h2>
+        </div>
+
+        <form id="user-form" data-form="user">
+          ${formSection('Identity', `
+            ${isNew
+              ? field('username','Username','text',u.username,{required:true,placeholder:'e.g. dsmith',hint:'2–32 chars · letters, numbers, period, underscore, hyphen only'})
+              : `<div>
+                  <label class="label-text" style="display:block;margin-bottom:.375rem;">Username</label>
+                  <input class="input-field" name="username" type="text" value="${esc(u.username)}" readonly style="background:var(--cream-soft);color:var(--ink-soft);">
+                  <p style="font-size:.7rem;color:var(--ink-soft);margin:.25rem 0 0;font-style:italic;">Usernames cannot be changed.</p>
+                </div>`
+            }
+            ${field('fullName','Full Name','text',u.fullName,{required:true,placeholder:'e.g. Jane Doe'})}
+            ${field('email','Email','email',u.email,{hint:'Optional'})}
+          `)}
+
+          ${formSection('Role &amp; Access', `
+            <div>
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Role</label>
+              <select class="input-field" name="role" ${isMe ? 'disabled' : ''}>
+                ${['Administrator','Coordinator'].map(r => `<option value="${r}"${u.role===r?' selected':''}>${r}</option>`).join('')}
+              </select>
+              <p style="font-size:.75rem;color:var(--ink-soft);margin:.375rem 0 0;font-style:italic;">
+                Administrator: full access including user management and deletes.<br>
+                Coordinator: register/edit children & parents, run check-in and check-out. No deletes, no user management.
+              </p>
+              ${isMe ? `<input type="hidden" name="role" value="Administrator"><p style="font-size:.7rem;color:var(--terra);margin:.25rem 0 0;">You cannot change your own role.</p>` : ''}
+            </div>
+            <div style="margin-top:1rem;">
+              <label class="label-text" style="display:block;margin-bottom:.375rem;">Status</label>
+              <div style="display:flex;gap:.5rem;">
+                ${[{val:'true',label:'Active'},{val:'false',label:'Inactive'}].map(opt => {
+                  const sel = opt.val === 'true' ? (u.active !== false) : (u.active === false);
+                  const dis = isMe && opt.val === 'false';
+                  return `<label class="btn" style="padding:.5rem 1rem;font-size:.875rem;border-radius:3px;flex:1;border:1px solid var(--divider);background:${sel?(opt.val==='true'?'var(--sage-dark)':'var(--danger)'):'var(--cream-soft)'};color:${sel?'var(--cream-soft)':'var(--ink)'};cursor:${dis?'not-allowed':'pointer'};opacity:${dis?'.5':'1'};display:flex;align-items:center;justify-content:center;gap:.375rem;">
+                    <input type="radio" name="active" value="${opt.val}" style="display:none;" ${sel?'checked':''} ${dis?'disabled':''}>
+                    ${opt.label}
+                  </label>`;
+                }).join('')}
+              </div>
+              <p style="font-size:.7rem;color:var(--ink-soft);margin:.25rem 0 0;font-style:italic;">Inactive users cannot sign in.${isMe ? ' You cannot deactivate your own account.' : ''}</p>
+            </div>
+          `)}
+
+          ${isNew ? formSection('Initial Password', `
+            ${field('password','Password','text',null,{required:true,hint:'At least 6 characters. Shown as text so you can copy it. Share it with the user — they should change it on first login.'})}
+          `) : `<div style="background:var(--cream-soft);border:1px solid var(--divider);padding:1rem;border-radius:3px;font-size:.85rem;color:var(--ink-soft);margin-bottom:1rem;">
+            <strong style="color:var(--ink);">Password not shown.</strong> To set a new password for this user, use the "Reset password" button on their card.
+          </div>`}
+
+          <div style="display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.5rem;flex-wrap:wrap;">
+            ${!isNew && !isMe ? `<button type="button" class="btn btn-danger" style="padding:.625rem 1.25rem;font-size:.875rem;display:flex;align-items:center;gap:.375rem;margin-right:auto;" data-action="delete-user" data-username="${esc(u.username)}">${icon('trash','icon icon-sm')} Delete user</button>` : ''}
+            <button type="button" class="btn btn-ghost" style="padding:.625rem 1.25rem;" data-action="cancel-user-form">Cancel</button>
+            <button type="submit" class="btn btn-primary" style="padding:.625rem 1.5rem;font-weight:600;border-radius:3px;display:flex;align-items:center;gap:.375rem;">${icon('check','icon icon-sm')} ${isNew ? 'Create user' : 'Save changes'}</button>
+          </div>
+        </form>
+      </div>
+    `;
+  }
+
+  function renderComingSoon() {
+    return `
+      <div class="anim-in" style="max-width:36rem;margin:0 auto;text-align:center;padding:3rem 1rem;">
+        <div style="width:64px;height:64px;border-radius:50%;background:var(--cream-soft);display:inline-flex;align-items:center;justify-content:center;color:var(--terra);margin-bottom:1rem;">
+          ${icon('sparkles','icon icon-lg')}
+        </div>
+        <h2 class="font-display" style="font-size:1.875rem;margin:0 0 .5rem;color:var(--ink);">More Tools On The Way</h2>
+        <p style="color:var(--ink-soft);font-size:.95rem;margin:0 0 1.5rem;">Future features under consideration include audit logs, attendance reports, classroom assignments, and photo uploads. Let us know what would help your ministry most.</p>
+        <button class="btn btn-ghost" style="padding:.5rem 1rem;" data-action="goto" data-view="dashboard">${icon('arrow-left','icon icon-sm')} Back to Overview</button>
       </div>
     `;
   }
@@ -1771,6 +2302,22 @@
     // Login form submission
     const loginForm = document.getElementById('login-form');
     if (loginForm) loginForm.addEventListener('submit', onLoginSubmit);
+
+    // Sign-in form submission (separate step after Connect)
+    const signinForm = document.getElementById('signin-form');
+    if (signinForm) signinForm.addEventListener('submit', onSignInSubmit);
+
+    // Change password form
+    const cpForm = document.getElementById('change-password-form');
+    if (cpForm) cpForm.addEventListener('submit', onChangePasswordSubmit);
+
+    // User form (admin user management)
+    const userForm = document.getElementById('user-form');
+    if (userForm) userForm.addEventListener('submit', onUserFormSubmit);
+
+    // Reset password confirm form
+    const rpForm = document.getElementById('reset-password-form');
+    if (rpForm) rpForm.addEventListener('submit', onResetPasswordSubmit);
   }
 
   function onLoginSubmit(e) {
@@ -1779,14 +2326,53 @@
     actions.connect(fd.get('backendUrl'), fd.get('passcode'));
   }
 
+  function onSignInSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    actions.signIn(fd.get('username'), fd.get('password'));
+  }
+
+  function onChangePasswordSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    actions.changeOwnPassword(fd.get('currentPassword'), fd.get('newPassword'), fd.get('confirmPassword'));
+  }
+
+  function onUserFormSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const u = {
+      username: (fd.get('username') || '').trim(),
+      fullName: (fd.get('fullName') || '').trim(),
+      email: (fd.get('email') || '').trim(),
+      role: fd.get('role') || 'Coordinator',
+      active: fd.get('active') !== 'false'
+    };
+    if (state.addingUser) {
+      actions.addUser(u, fd.get('password'));
+    } else {
+      actions.updateUser(u);
+    }
+  }
+
+  function onResetPasswordSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    actions.resetUserPassword(state.resettingPasswordFor, fd.get('newPassword'), fd.get('confirmPassword'));
+  }
+
   function onClick(e) {
     const target = e.target.closest('[data-action]');
-    // Close settings dropdown on outside click
-    if (state.showSettings && !target) {
-      if (!e.target.closest('[data-action="toggle-settings"]')) {
-        state.showSettings = false;
-        render();
+    // Close settings/user menu on outside click
+    if ((state.showSettings || state.showUserMenu) && !target) {
+      let changed = false;
+      if (state.showSettings && !e.target.closest('[data-action="toggle-settings"]')) {
+        state.showSettings = false; changed = true;
       }
+      if (state.showUserMenu && !e.target.closest('[data-action="toggle-user-menu"]')) {
+        state.showUserMenu = false; changed = true;
+      }
+      if (changed) render();
       return;
     }
     if (!target) return;
@@ -1849,10 +2435,80 @@
       case 'export-json': actions.exportJSON(); break;
       case 'export-csv': actions.exportCSV(); break;
       case 'toggle-settings': actions.toggleSettings(); break;
+      case 'toggle-user-menu': state.showUserMenu = !state.showUserMenu; state.showSettings = false; render(); break;
       case 'disconnect': actions.disconnect(); break;
       case 'refresh': actions.refresh(); break;
       case 'show-login': state.showSettings = false; state.view = 'login'; render(); break;
       case 'try-demo': state.view = 'dashboard'; render(); break;
+      case 'sign-out': state.showUserMenu = false; actions.signOut(); break;
+      case 'back-to-connect': {
+        // User clicked "Reconfigure connection" on the sign-in step
+        store.remove(KEYS.CONFIG);
+        state.config = null;
+        state.bootError = null;
+        state.loginError = null;
+        render();
+        break;
+      }
+      case 'open-change-password':
+        state.showUserMenu = false;
+        state.showChangePassword = true;
+        render();
+        break;
+      case 'close-change-password':
+        state.showChangePassword = false;
+        render();
+        break;
+      case 'goto-users': {
+        state.showUserMenu = false;
+        if (!isAdmin()) { toast('Administrator access required.', 'error'); break; }
+        state.view = 'users';
+        render();
+        actions.loadUsers();
+        break;
+      }
+      case 'reload-users': actions.loadUsers(); break;
+      case 'goto-coming-soon': actions.goto('coming-soon'); break;
+      case 'add-user':
+        if (!isAdmin()) { toast('Administrator access required.', 'error'); break; }
+        state.editingUser = null;
+        state.addingUser = true;
+        state.view = 'user-form';
+        render();
+        break;
+      case 'edit-user': {
+        if (!isAdmin()) { toast('Administrator access required.', 'error'); break; }
+        const username = target.dataset.username;
+        const u = state.users.find(x => x.username === username);
+        if (!u) { toast('User not found.', 'error'); break; }
+        state.editingUser = Object.assign({}, u);
+        state.addingUser = false;
+        state.view = 'user-form';
+        render();
+        break;
+      }
+      case 'cancel-user-form':
+        state.editingUser = null;
+        state.addingUser = false;
+        state.view = 'users';
+        render();
+        break;
+      case 'delete-user': {
+        if (!isAdmin()) { toast('Administrator access required.', 'error'); break; }
+        const username = target.dataset.username;
+        actions.deleteUser(username);
+        break;
+      }
+      case 'reset-password': {
+        if (!isAdmin()) { toast('Administrator access required.', 'error'); break; }
+        state.resettingPasswordFor = target.dataset.username;
+        render();
+        break;
+      }
+      case 'cancel-reset-password':
+        state.resettingPasswordFor = null;
+        render();
+        break;
       case 'set-preferred': {
         state.editing = state.editing || emptyChild();
         state.editing.preferredContact = target.dataset.value;
@@ -1921,6 +2577,10 @@
       state.parentSearch = target.value;
       clearTimeout(window._searchT);
       window._searchT = setTimeout(() => { render(); const inp = document.querySelector('[data-action="search-parents"]'); if (inp) { inp.focus(); inp.setSelectionRange(state.parentSearch.length, state.parentSearch.length); } }, 100);
+    } else if (target.dataset.action === 'search-users') {
+      state.userSearch = target.value;
+      clearTimeout(window._searchT);
+      window._searchT = setTimeout(() => { render(); const inp = document.querySelector('[data-action="search-users"]'); if (inp) { inp.focus(); inp.setSelectionRange(state.userSearch.length, state.userSearch.length); } }, 100);
     } else if (target.dataset.action === 'checkout-other-input') {
       // Don't re-render — just capture the typed name
       state.checkoutOtherName = target.value;
@@ -2033,6 +2693,13 @@
 
   // Boot
   init();
+
+  // Refresh the dashboard every 30 seconds so the displayed time stays current.
+  // We only re-render when the user is actually viewing the dashboard, so we
+  // don't disrupt anything they're typing in a form or check-in screen.
+  setInterval(() => {
+    if (state.view === 'dashboard') render();
+  }, 30000);
   </script>
 </body>
 </html>

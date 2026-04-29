@@ -166,14 +166,14 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 1.8.1
+  // Version 1.8.2
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '1.8.1';
+  const APP_VERSION = '1.8.2';
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -897,8 +897,9 @@
           ${actionCard('user-plus','New Registration','Add a child &amp; guardians','new-child')}
           ${actionCard('clipboard',"Today's Check-In",'Check children in for today','goto-checkin')}
           ${actionCard('logout',"Today's Check-Out",'Check children out at pickup','goto-checkout')}
-          ${actionCard('book','Full Roster','Browse &amp; edit records','goto-roster')}
+          ${actionCard('book','Full Roster – Children','Browse &amp; edit child records','goto-roster')}
           ${actionCard('users','Parent/Guardian Registration','Add a parent or guardian record','new-parent')}
+          ${actionCard('book','Parents/Guardian Roster','Browse, edit &amp; remove parents','goto-parents')}
         </div>
 
         <div style="display:grid;grid-template-columns:1fr;gap:1.5rem;" id="dash-bottom">

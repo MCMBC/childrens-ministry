@@ -166,14 +166,14 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 2.0.1
+  // Version 2.0.2
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '2.0.1';
+  const APP_VERSION = '2.0.2';
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -323,10 +323,34 @@
   // Boot the user out of their current session when their token has expired,
   // their account was deactivated, etc. Keeps the config (backend URL + passcode)
   // so the next user can sign in without re-doing setup.
+  // Clear all transient UI state so the next render starts from a clean slate.
+  // Call this on sign-in (success) and any sign-out path so an in-progress
+  // modal or form from one user's session doesn't bleed into another's.
+  function resetTransientUiState() {
+    state.editing = null;
+    state.editingParent = null;
+    state.editingUser = null;
+    state.addingUser = false;
+    state.selectedId = null;
+    state.search = '';
+    state.parentSearch = '';
+    state.checkinSearch = '';
+    state.userSearch = '';
+    state.showSettings = false;
+    state.showUserMenu = false;
+    state.showChangePassword = false;
+    state.resettingPasswordFor = null;
+    state.checkoutOtherFor = null;
+    state.checkoutOtherName = '';
+    state.bootError = null;
+    state.loginError = null;
+  }
+
   function forceLogout(reason) {
     state.session = null;
     state.users = [];
     store.remove(KEYS.SESSION);
+    resetTransientUiState();
     state.view = 'login';
     state.bootError = reason || 'Your session ended. Please sign in again.';
     render();
@@ -630,6 +654,8 @@
         };
         store.save(KEYS.SESSION, state.session);
         state.loginDraft = { backendUrl: '', passcode: '', username: '', password: '' };
+        // Reset any UI state that may have leaked in from a prior session
+        resetTransientUiState();
         // Load all the data
         const data = await api.get();
         state.children = (data.children || []).map(normalizeChild);
@@ -661,10 +687,8 @@
       store.remove(KEYS.CHILDREN);
       store.remove(KEYS.ATTENDANCE);
       store.remove(KEYS.PARENTS);
+      resetTransientUiState();
       state.view = 'login';
-      state.bootError = null;
-      state.loginError = null;
-      state.showSettings = false;
       render();
     },
 

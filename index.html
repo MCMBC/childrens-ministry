@@ -166,14 +166,14 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 2.0.0
+  // Version 2.0.1
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '2.0.0';
+  const APP_VERSION = '2.0.1';
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -549,6 +549,8 @@
       if ('editingParent' in opts) state.editingParent = opts.editingParent;
       window.scrollTo({top: 0});
       render();
+      // Auto-load users any time we navigate to the Users view (via tab, card, etc.)
+      if (view === 'users' && isAdmin()) this.loadUsers();
     },
 
     // Step 1 of login: validate the backend URL + passcode by hitting the backend.
@@ -721,6 +723,7 @@
         await api.post('addUser', { user: userInput, password });
         state.addingUser = false;
         state.editingUser = null;
+        state.view = 'users';
         await this.loadUsers();
         toast('User created: ' + userInput.username);
       } catch (err) {
@@ -732,6 +735,8 @@
       try {
         await api.post('updateUser', { user: userInput });
         state.editingUser = null;
+        state.addingUser = false;
+        state.view = 'users';
         await this.loadUsers();
         toast('User updated: ' + userInput.username);
       } catch (err) {
@@ -744,6 +749,8 @@
       try {
         await api.post('deleteUser', { username });
         state.editingUser = null;
+        state.addingUser = false;
+        state.view = 'users';
         await this.loadUsers();
         toast('User deleted: ' + username, 'warn');
       } catch (err) {

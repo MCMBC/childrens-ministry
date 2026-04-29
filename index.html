@@ -166,14 +166,14 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 1.8.0
+  // Version 1.8.1
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '1.8.0';
+  const APP_VERSION = '1.8.1';
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -337,8 +337,22 @@
   const uid = () => Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4);
   const todayISO = () => new Date().toISOString().slice(0,10);
   const nowISO = () => new Date().toISOString();
+  // Normalize whatever format the backend or local storage gives us
+  // (Sheets dates round-trip as "2026-04-29T00:00:00.000Z"; local dates are "2026-04-29")
+  // down to a clean "YYYY-MM-DD" string for safe comparison and grouping.
+  const normalizeDate = (raw) => {
+    if (!raw) return '';
+    const m = String(raw).match(/^\d{4}-\d{2}-\d{2}/);
+    return m ? m[0] : '';
+  };
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
-  const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}) : '';
+  const fmtDate = (raw) => {
+    const norm = normalizeDate(raw);
+    if (!norm) return '';
+    const d = new Date(norm + 'T12:00:00Z');
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  };
   const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '';
   const calcAge = (bd) => {
     if (!bd) return '';
@@ -823,7 +837,7 @@
   // ---------- Dashboard ----------
   function renderDashboard() {
     const today = todayISO();
-    const checkedInToday = state.attendance.filter(a => a.date === today);
+    const checkedInToday = state.attendance.filter(a => normalizeDate(a.date) === today);
     const presentNow = checkedInToday.filter(a => !a.checkOutAt);
     const withAllergies = state.children.filter(c => c.allergies && c.allergies.trim() && c.allergies.toLowerCase() !== 'none');
     const severe = state.children.filter(c => c.allergySeverity === 'Severe');
@@ -836,9 +850,10 @@
     const cutoffISO = cutoff.toISOString().slice(0, 10);
     const byDate = {};
     state.attendance.forEach(a => {
-      if (!a.date || a.date < cutoffISO) return;
-      if (!byDate[a.date]) byDate[a.date] = new Set();
-      byDate[a.date].add(a.childId);
+      const d = normalizeDate(a.date);
+      if (!d || d < cutoffISO) return;
+      if (!byDate[d]) byDate[d] = new Set();
+      byDate[d].add(a.childId);
     });
     const childById = {};
     state.children.forEach(c => { childById[c.id] = c; });
@@ -848,14 +863,15 @@
         .map(id => childById[id] ? childById[id].fullName : null)
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b));
-      // Use noon UTC to keep day-of-week stable across timezones
-      const d = new Date(date + 'T12:00:00Z');
+      // Anchor at noon UTC so the day-of-week matches the stored date regardless of TZ
+      const dt = new Date(date + 'T12:00:00Z');
+      const valid = !isNaN(dt.getTime());
       return {
         date,
         count: ids.length,
         names,
-        dayLabel: d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
-        dateLabel: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+        dayLabel: valid ? dt.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }) : '',
+        dateLabel: valid ? dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : date
       };
     });
     const maxDay = Math.max(1, ...days.map(d => d.count));
@@ -1331,7 +1347,7 @@
   // ---------- Check-in ----------
   function renderCheckin() {
     const today = todayISO();
-    const todayRecords = state.attendance.filter(a => a.date === today);
+    const todayRecords = state.attendance.filter(a => normalizeDate(a.date) === today);
     const activeToday = todayRecords.filter(a => !a.checkOutAt);
     const presentIds = new Set(activeToday.map(a => a.childId));
     const q = state.checkinSearch.toLowerCase().trim();
@@ -1410,9 +1426,9 @@
   // ---------- Check-out ----------
   function renderCheckout() {
     const today = todayISO();
-    const activeToday = state.attendance.filter(a => a.date === today && !a.checkOutAt);
+    const activeToday = state.attendance.filter(a => normalizeDate(a.date) === today && !a.checkOutAt);
     const checkedOutToday = state.attendance
-      .filter(a => a.date === today && a.checkOutAt)
+      .filter(a => normalizeDate(a.date) === today && a.checkOutAt)
       .sort((a, b) => (b.checkOutAt || '').localeCompare(a.checkOutAt || ''));
 
     return `

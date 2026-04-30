@@ -166,14 +166,14 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 2.0.3
+  // Version 2.1.0
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '2.0.3';
+  const APP_VERSION = '2.1.0';
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -436,6 +436,7 @@
   const normalizeChild = (c) => {
     if (!Array.isArray(c.parentIds)) c.parentIds = [];
     if (!Array.isArray(c.authorizedPickupIds)) c.authorizedPickupIds = [];
+    if (typeof c.emergencyContactId !== 'string') c.emergencyContactId = '';
     return c;
   };
   const normalizeParent = (p) => {
@@ -460,7 +461,7 @@
   const emptyChild = () => ({
     id:'', fullName:'', birthdate:'', gradeLevel:'', school:'', parentNames:'',
     phoneNumbers:'', emails:'', preferredContact:'Phone', allergies:'', allergySeverity:'None',
-    medicalConditions:'', specialNeeds:'', emergencyContact:'', authorizedPickup:'',
+    medicalConditions:'', specialNeeds:'', emergencyContact:'', emergencyContactId:'', authorizedPickup:'',
     photoConsent:false, newsletterOptIn:false, visitorStatus:'Member', churchMembership:'',
     prayerRequests:'', classroom:'', parentIds:[], authorizedPickupIds:[], createdAt:''
   });
@@ -941,7 +942,11 @@
     if (!c.fullName.trim()) return 'Child\'s full name is required';
     if (!c.parentNames.trim()) return 'Parent/guardian name is required';
     if (!c.phoneNumbers.trim() && !c.emails.trim()) return 'Provide a phone number or email';
-    if (!c.emergencyContact.trim()) return 'Emergency contact is required for safety';
+    // Emergency contact: either a linked parent ID is selected, or there's
+    // legacy free-text on file (existing records from before v2.1.0)
+    const hasEmergency = (c.emergencyContactId && c.emergencyContactId.trim()) ||
+                         (c.emergencyContact && c.emergencyContact.trim());
+    if (!hasEmergency) return 'Emergency contact is required for safety. Link a parent to this child first, then choose them as the emergency contact.';
     return null;
   }
 
@@ -1770,8 +1775,96 @@
           </div>
           ${field('medicalConditions','Medical Conditions','textarea',c.medicalConditions)}
           ${field('specialNeeds','Special Needs / Accommodations','textarea',c.specialNeeds)}
-          ${field('emergencyContact','Emergency Contact','text',c.emergencyContact,{required:true,hint:'Name & phone of someone other than the parent — phone format: (555) 123-4567'})}
-          ${field('authorizedPickup','Authorized Pick-Up List','textarea',c.authorizedPickup,{hint:'Names of anyone allowed to collect the child'})}
+
+          ${(() => {
+            // Emergency Contact — dropdown of parents linked to THIS child
+            const linkedParents = (c.parentIds || [])
+              .map(pid => state.parents.find(p => p.id === pid))
+              .filter(Boolean);
+            const selectedParent = c.emergencyContactId ? linkedParents.find(p => p.id === c.emergencyContactId) : null;
+            const isLegacyText = !!c.emergencyContact && !selectedParent;
+            return `
+              <div>
+                <label class="label-text" style="display:flex;align-items:center;gap:.25rem;margin-bottom:.375rem;">
+                  Emergency Contact <span style="color:var(--danger);">*</span>
+                </label>
+                ${linkedParents.length === 0
+                  ? `<div style="padding:.625rem .75rem;border-radius:3px;background:var(--cream-soft);border:1px dashed var(--divider);font-size:.85rem;color:var(--ink-soft);font-style:italic;">
+                       Link a parent to this child first (in the Parent/Guardian section above), then they'll appear here as options.
+                     </div>`
+                  : `<select class="input-field" data-action="set-emergency-contact">
+                      <option value="">— Select an emergency contact —</option>
+                      ${linkedParents.map(p =>
+                        `<option value="${esc(p.id)}"${c.emergencyContactId === p.id ? ' selected' : ''}>${esc(p.fullName)}${p.relationship ? ' (' + esc(p.relationship) + ')' : ''}${p.phoneNumbers ? ' — ' + esc(p.phoneNumbers.split(',')[0].trim()) : ''}</option>`
+                      ).join('')}
+                    </select>`
+                }
+                ${isLegacyText ? `
+                  <div style="margin-top:.5rem;padding:.5rem .625rem;border-radius:3px;background:#FFF4E5;border:1px solid #F0C674;font-size:.8rem;color:#8B5A00;">
+                    <strong>Legacy entry:</strong> ${esc(c.emergencyContact)}
+                    <div style="margin-top:.25rem;font-style:italic;">This was entered as free text in an earlier version. Pick a linked parent above to replace it.</div>
+                  </div>
+                ` : ''}
+                <p style="font-size:.75rem;color:var(--ink-soft);margin:.375rem 0 0;font-style:italic;">The person to contact in case of emergency. Must be a registered parent/guardian linked to this child.</p>
+              </div>
+            `;
+          })()}
+
+          ${(() => {
+            // Authorized Pick-Up — multi-select chips of LINKED + AUTHORIZED parents
+            const linkedAuthorized = (c.parentIds || [])
+              .map(pid => state.parents.find(p => p.id === pid))
+              .filter(p => p && p.authorizedForPickup !== false);
+            const linkedNotAuthorized = (c.parentIds || [])
+              .map(pid => state.parents.find(p => p.id === pid))
+              .filter(p => p && p.authorizedForPickup === false);
+            const selectedIds = new Set(c.authorizedPickupIds || []);
+            const selectedParents = linkedAuthorized.filter(p => selectedIds.has(p.id));
+            const availableToAdd = linkedAuthorized.filter(p => !selectedIds.has(p.id));
+            const isLegacyText = !!c.authorizedPickup && (c.authorizedPickupIds || []).length === 0;
+            return `
+              <div>
+                <label class="label-text" style="display:block;margin-bottom:.375rem;">Authorized Pick-Up List</label>
+                ${linkedAuthorized.length === 0
+                  ? `<div style="padding:.625rem .75rem;border-radius:3px;background:var(--cream-soft);border:1px dashed var(--divider);font-size:.85rem;color:var(--ink-soft);font-style:italic;">
+                       No linked + authorized parents yet. Link a parent who is marked "Authorized for Check-In/Check-Out" to make them available here.
+                     </div>`
+                  : `
+                    ${selectedParents.length > 0 ? `
+                      <div style="display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.5rem;">
+                        ${selectedParents.map(p => `
+                          <div style="display:flex;align-items:center;gap:.375rem;padding:.375rem .625rem;border-radius:999px;background:var(--sage-dark);color:var(--cream-soft);font-size:.8rem;font-weight:500;">
+                            <span>${esc(p.fullName)}${p.relationship ? ` (${esc(p.relationship)})` : ''}</span>
+                            <button type="button" class="btn" style="padding:0;font-size:.85rem;background:transparent;color:var(--cream-soft);line-height:1;" data-action="remove-authorized-pickup" data-id="${esc(p.id)}" title="Remove from authorized list">✕</button>
+                          </div>
+                        `).join('')}
+                      </div>
+                    ` : ''}
+                    ${availableToAdd.length > 0 ? `
+                      <select class="input-field" data-action="add-authorized-pickup">
+                        <option value="">— Add to authorized pick-up list —</option>
+                        ${availableToAdd.map(p =>
+                          `<option value="${esc(p.id)}">${esc(p.fullName)}${p.relationship ? ' (' + esc(p.relationship) + ')' : ''}</option>`
+                        ).join('')}
+                      </select>
+                    ` : `<p style="font-size:.75rem;color:var(--ink-soft);margin:.5rem 0 0;font-style:italic;">All linked + authorized parents have been added.</p>`}
+                  `
+                }
+                ${linkedNotAuthorized.length > 0 ? `
+                  <p style="font-size:.7rem;color:var(--terra);margin:.5rem 0 0;font-style:italic;">
+                    ${linkedNotAuthorized.length} linked ${linkedNotAuthorized.length === 1 ? 'parent is' : 'parents are'} not authorized for pickup and won't appear here. Update their record on the Parents tab to change this.
+                  </p>
+                ` : ''}
+                ${isLegacyText ? `
+                  <div style="margin-top:.5rem;padding:.5rem .625rem;border-radius:3px;background:#FFF4E5;border:1px solid #F0C674;font-size:.8rem;color:#8B5A00;">
+                    <strong>Legacy entry:</strong> ${esc(c.authorizedPickup)}
+                    <div style="margin-top:.25rem;font-style:italic;">These names were entered as free text in an earlier version. Add the corresponding linked parents above to replace them.</div>
+                  </div>
+                ` : ''}
+                <p style="font-size:.75rem;color:var(--ink-soft);margin:.375rem 0 0;font-style:italic;">Adults who may collect this child. Only linked parents/guardians marked "Authorized" appear as options.</p>
+              </div>
+            `;
+          })()}
         `, 'danger')}
 
         ${formSection('Communication &amp; Permissions', `
@@ -2578,12 +2671,39 @@
         captureFormInputs();
         const c = state.editing || emptyChild();
         c.parentIds = (c.parentIds || []).filter(pid => pid !== id);
+        // If this parent was the emergency contact, clear it
+        if (c.emergencyContactId === id) {
+          c.emergencyContactId = '';
+          c.emergencyContact = '';
+        }
+        // If this parent was on the authorized pickup list, remove them
+        c.authorizedPickupIds = (c.authorizedPickupIds || []).filter(pid => pid !== id);
+        // Refresh the legacy authorizedPickup text mirror
+        const pickupNames = c.authorizedPickupIds
+          .map(pid => state.parents.find(x => x.id === pid))
+          .filter(Boolean)
+          .map(p => p.fullName);
+        c.authorizedPickup = pickupNames.join(', ');
         // Optionally remove that parent's name from the parentNames text too
         const removed = state.parents.find(p => p.id === id);
         if (removed && c.parentNames) {
           const names = c.parentNames.split(',').map(s => s.trim()).filter(s => s && s !== removed.fullName);
           c.parentNames = names.join(', ');
         }
+        state.editing = c;
+        render();
+        break;
+      }
+      case 'remove-authorized-pickup': {
+        captureFormInputs();
+        const c = state.editing || emptyChild();
+        c.authorizedPickupIds = (c.authorizedPickupIds || []).filter(pid => pid !== id);
+        // Refresh legacy text field to mirror the chip list
+        const names = c.authorizedPickupIds
+          .map(pid => state.parents.find(x => x.id === pid))
+          .filter(Boolean)
+          .map(p => p.fullName);
+        c.authorizedPickup = names.join(', ');
         state.editing = c;
         render();
         break;
@@ -2656,6 +2776,40 @@
       state.editing = c;
       render();
       toast(`Linked ${parent.fullName}`);
+    } else if (target.dataset.action === 'set-emergency-contact') {
+      captureFormInputs();
+      const c = state.editing || emptyChild();
+      const parentId = target.value;
+      c.emergencyContactId = parentId;
+      // Also store the resolved name + phone in the legacy text field, so it
+      // shows up consistently in the child detail view, exports, and on legacy
+      // sheets that don't have the new column.
+      if (parentId) {
+        const p = state.parents.find(x => x.id === parentId);
+        if (p) {
+          const phone = (p.phoneNumbers || '').split(',')[0].trim();
+          c.emergencyContact = phone ? `${p.fullName} — ${phone}` : p.fullName;
+        }
+      } else {
+        c.emergencyContact = '';
+      }
+      state.editing = c;
+      render();
+    } else if (target.dataset.action === 'add-authorized-pickup') {
+      const parentId = target.value;
+      if (!parentId) return;
+      captureFormInputs();
+      const c = state.editing || emptyChild();
+      if (!Array.isArray(c.authorizedPickupIds)) c.authorizedPickupIds = [];
+      if (!c.authorizedPickupIds.includes(parentId)) c.authorizedPickupIds.push(parentId);
+      // Refresh the legacy text field to mirror the chip list (for child detail / exports)
+      const names = c.authorizedPickupIds
+        .map(pid => state.parents.find(x => x.id === pid))
+        .filter(Boolean)
+        .map(p => p.fullName);
+      c.authorizedPickup = names.join(', ');
+      state.editing = c;
+      render();
     }
   }
 
@@ -2703,6 +2857,10 @@
       // Linked parent IDs are managed via the link/unlink buttons, not form fields
       data.parentIds = Array.isArray(state.editing.parentIds) ? state.editing.parentIds.slice() : [];
       data.authorizedPickupIds = Array.isArray(state.editing.authorizedPickupIds) ? state.editing.authorizedPickupIds.slice() : [];
+      // Emergency contact + authorized pickup are now driven by linked parents
+      data.emergencyContactId = state.editing.emergencyContactId || '';
+      data.emergencyContact = state.editing.emergencyContact || '';
+      data.authorizedPickup = state.editing.authorizedPickup || '';
       if (state.editing.id) data.id = state.editing.id;
       if (state.editing.createdAt) data.createdAt = state.editing.createdAt;
     }

@@ -166,14 +166,14 @@
   <script>
   // ============================================================
   // Mt. Calvary M.B. Church — Children's Ministry System
-  // Version 2.1.0
+  // Version 2.2.0
   // Google Sheets-backed version.
   // First run: enter your Web App URL and passcode to connect.
   // Data is synced to a shared Google Sheet and cached locally
   // so the app keeps working if the network drops.
   // ============================================================
 
-  const APP_VERSION = '2.1.0';
+  const APP_VERSION = '2.2.0';
 
   const KEYS = {
     CHILDREN: 'cc:children',
@@ -444,8 +444,67 @@
     // them generously so existing records don't suddenly become unauthorized.
     if (p.relationship === '' || p.relationship == null) p.relationship = 'Parent';
     if (p.authorizedForPickup === '' || p.authorizedForPickup == null) p.authorizedForPickup = true;
+    // Structured address fields (added in v2.2.0). Old records have only the
+    // legacy `address` text field; new records use the structured ones.
+    if (typeof p.address1 !== 'string') p.address1 = '';
+    if (typeof p.address2 !== 'string') p.address2 = '';
+    if (typeof p.city !== 'string') p.city = '';
+    if (typeof p.state !== 'string') p.state = '';
+    if (typeof p.zip !== 'string') p.zip = '';
     return p;
   };
+
+  // US states + DC for the Address state dropdown
+  const US_STATES = [
+    ['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],['CA','California'],
+    ['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],['DC','District of Columbia'],
+    ['FL','Florida'],['GA','Georgia'],['HI','Hawaii'],['ID','Idaho'],['IL','Illinois'],
+    ['IN','Indiana'],['IA','Iowa'],['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],
+    ['ME','Maine'],['MD','Maryland'],['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],
+    ['MS','Mississippi'],['MO','Missouri'],['MT','Montana'],['NE','Nebraska'],['NV','Nevada'],
+    ['NH','New Hampshire'],['NJ','New Jersey'],['NM','New Mexico'],['NY','New York'],
+    ['NC','North Carolina'],['ND','North Dakota'],['OH','Ohio'],['OK','Oklahoma'],['OR','Oregon'],
+    ['PA','Pennsylvania'],['RI','Rhode Island'],['SC','South Carolina'],['SD','South Dakota'],
+    ['TN','Tennessee'],['TX','Texas'],['UT','Utah'],['VT','Vermont'],['VA','Virginia'],
+    ['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming']
+  ];
+
+  // Build a single-line display string from a parent's structured or legacy address.
+  // Used in roster cards and child detail views where we don't want a multi-line address.
+  function formatAddressOneLine(p) {
+    if (!p) return '';
+    const street = [p.address1, p.address2].filter(s => s && s.trim()).join(', ');
+    const cityStateZip = [
+      (p.city || '').trim(),
+      [p.state, p.zip].filter(s => s && s.trim()).join(' ').trim()
+    ].filter(s => s).join(', ');
+    const structured = [street, cityStateZip].filter(s => s).join(', ');
+    return structured || (p.address || '');
+  }
+
+  // Multi-line display (3 lines): address1 / address2 / city, state zip.
+  // Used wherever there's room to show a proper formatted address block.
+  function formatAddressLines(p) {
+    if (!p) return [];
+    const lines = [];
+    if (p.address1 && p.address1.trim()) lines.push(p.address1.trim());
+    if (p.address2 && p.address2.trim()) lines.push(p.address2.trim());
+    const cityStateZip = [
+      (p.city || '').trim(),
+      [p.state, p.zip].filter(s => s && s.trim()).join(' ').trim()
+    ].filter(s => s).join(', ');
+    if (cityStateZip) lines.push(cityStateZip);
+    if (lines.length === 0 && p.address && p.address.trim()) {
+      // Legacy free-text fallback
+      return p.address.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    }
+    return lines;
+  }
+
+  // True if the parent has any structured address fields filled in
+  function hasStructuredAddress(p) {
+    return !!(p && (p.address1 || p.address2 || p.city || p.state || p.zip));
+  }
   const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '';
   const calcAge = (bd) => {
     if (!bd) return '';
@@ -468,7 +527,8 @@
 
   const emptyParent = () => ({
     id:'', fullName:'', phoneNumbers:'', emails:'', preferredContact:'Phone',
-    address:'', churchMembership:'', notes:'',
+    address:'', address1:'', address2:'', city:'', state:'', zip:'',
+    churchMembership:'', notes:'',
     relationship:'Parent', authorizedForPickup:true,
     createdAt:''
   });
@@ -2130,7 +2190,8 @@
       p.fullName.toLowerCase().includes(q) ||
       (p.phoneNumbers||'').toLowerCase().includes(q) ||
       (p.emails||'').toLowerCase().includes(q) ||
-      (p.churchMembership||'').toLowerCase().includes(q)
+      (p.churchMembership||'').toLowerCase().includes(q) ||
+      formatAddressOneLine(p).toLowerCase().includes(q)
     ) : state.parents;
 
     return `
@@ -2175,6 +2236,10 @@
                       <div style="font-size:.8rem;color:var(--ink-soft);margin-top:.375rem;">
                         ${p.phoneNumbers ? esc(p.phoneNumbers) : ''}${p.phoneNumbers && p.emails ? ' · ' : ''}${p.emails ? esc(p.emails) : ''}
                       </div>
+                      ${(() => {
+                        const addr = formatAddressOneLine(p);
+                        return addr ? `<div style="font-size:.75rem;color:var(--ink-soft);margin-top:.125rem;">${esc(addr)}</div>` : '';
+                      })()}
                       ${p.churchMembership ? `<div style="font-size:.75rem;color:var(--ink-soft);margin-top:.125rem;">${esc(p.churchMembership)}</div>` : ''}
                     </div>
                   </div>
@@ -2219,7 +2284,35 @@
                 `).join('')}
               </div>
             </div>
-            ${field('address','Address','textarea',p.address,{hint:'Optional'})}
+            ${(() => {
+              // Structured address (v2.2.0+). If only legacy free-text exists,
+              // show a small banner pointing the user to migrate.
+              const hasLegacy = p.address && p.address.trim() && !hasStructuredAddress(p);
+              return `
+                <div style="margin-top:1rem;">
+                  <label class="label-text" style="display:block;margin-bottom:.375rem;">Address</label>
+                  ${hasLegacy ? `
+                    <div style="margin-bottom:.5rem;padding:.5rem .625rem;border-radius:3px;background:#FFF4E5;border:1px solid #F0C674;font-size:.8rem;color:#8B5A00;">
+                      <strong>Legacy address:</strong> ${esc(p.address)}
+                      <div style="margin-top:.25rem;font-style:italic;">This was entered as free text in an earlier version. Fill in the structured fields below to replace it.</div>
+                    </div>
+                  ` : ''}
+                  <input class="input-field" name="address1" type="text" placeholder="Address Line 1 — e.g., 123 Main Street" value="${esc(p.address1 || '')}" style="margin-bottom:.5rem;">
+                  <input class="input-field" name="address2" type="text" placeholder="Address Line 2 — Apt, Suite, Unit (optional)" value="${esc(p.address2 || '')}" style="margin-bottom:.5rem;">
+                  <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:.5rem;" class="address-grid">
+                    <input class="input-field" name="city" type="text" placeholder="City" value="${esc(p.city || '')}">
+                    <select class="input-field" name="state">
+                      <option value="">State</option>
+                      ${US_STATES.map(([code, name]) =>
+                        `<option value="${code}"${p.state === code ? ' selected' : ''}>${code}</option>`
+                      ).join('')}
+                    </select>
+                    <input class="input-field" name="zip" type="text" placeholder="ZIP" value="${esc(p.zip || '')}" pattern="[0-9]{5}(-[0-9]{4})?" maxlength="10">
+                  </div>
+                  <p style="font-size:.75rem;color:var(--ink-soft);margin:.375rem 0 0;font-style:italic;">Optional. ZIP format: 12345 or 12345-6789</p>
+                </div>
+              `;
+            })()}
           `)}
 
           ${formSection('Relationship &amp; Authorization', `
